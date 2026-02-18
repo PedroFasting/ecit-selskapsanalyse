@@ -10,6 +10,7 @@ Moduler:
 from .database import init_database, get_connection, reset_database
 from .importer import import_excel, list_imports
 from .analytics import HRAnalytics, get_analytics
+from .report_generator import generate_report
 
 __version__ = "1.0.0"
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     'list_imports',
     'HRAnalytics',
     'get_analytics',
+    'generate_report',
 ]

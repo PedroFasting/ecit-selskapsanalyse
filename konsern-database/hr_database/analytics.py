@@ -126,7 +126,7 @@ class HRAnalytics:
         rows = self._query(f"""
             SELECT COALESCE(arbeidsland, 'Ukjent') as land, COUNT(*) as antall 
             FROM ansatte {where}
-            GROUP BY land
+            GROUP BY arbeidsland
             ORDER BY antall DESC
         """)
         return {row['land']: row['antall'] for row in rows}
@@ -174,7 +174,7 @@ class HRAnalytics:
                 COALESCE(kjonn, 'Ukjent') as kjonn,
                 COUNT(*) as antall 
             FROM ansatte {where}
-            GROUP BY land, kjonn
+            GROUP BY arbeidsland, kjonn
         """)
         
         result = defaultdict(lambda: {'Mann': 0, 'Kvinne': 0, 'Ukjent': 0})
@@ -765,7 +765,7 @@ class HRAnalytics:
                 MAX(lonn) as maks,
                 SUM(lonn) as total
             FROM ansatte {where}
-            GROUP BY land
+            GROUP BY arbeidsland
             ORDER BY snitt DESC
         """)
         
@@ -885,7 +885,7 @@ class HRAnalytics:
                 COALESCE(jobbfamilie, 'Ikke angitt') as jobbfamilie,
                 COUNT(*) as antall
             FROM ansatte {where}
-            GROUP BY land, jobbfamilie
+            GROUP BY arbeidsland, jobbfamilie
         """)
         
         result = defaultdict(dict)

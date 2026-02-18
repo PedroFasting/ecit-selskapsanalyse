@@ -1,0 +1,18 @@
+# HR Analyse — Docker Compose
+# Start med: docker compose up
+# Tilgjengelig på: http://localhost:8080
+
+services:
+  hr-analyse:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - hr-data:/app/data
+    environment:
+      - DB_PATH=/app/data/ansatte.db
+    restart: unless-stopped
+
+volumes:
+  hr-data:
+    name: hr-analyse-data

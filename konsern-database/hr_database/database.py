@@ -9,8 +9,9 @@ from datetime import date, datetime
 from typing import Optional
 import os
 
-# Standard database-plassering
-DEFAULT_DB_PATH = Path(__file__).parent.parent / "ansatte.db"
+# Standard database-plassering — kan overstyres med DB_PATH miljøvariabel
+_env_db_path = os.environ.get("DB_PATH")
+DEFAULT_DB_PATH = Path(_env_db_path) if _env_db_path else Path(__file__).parent.parent / "ansatte.db"
 
 
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:

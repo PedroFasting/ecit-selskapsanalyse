@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from hr_database import (
     init_database, import_excel, list_imports, 
-    get_analytics, reset_database
+    get_analytics, reset_database, generate_report
 )
 
 
@@ -457,7 +457,7 @@ class HRCLI:
   [1] Initialiser ny database
   [2] Reset database (SLETTER ALLE DATA)
   [3] Se import-historikk
-  [4] Eksporter rapport (TODO)
+  [4] Eksporter rapport (PDF)
         """)
         
         choice = input("Velg: ").strip()
@@ -483,6 +483,8 @@ class HRCLI:
                 print_table(headers, rows, [32, 18, 8, 10])
             else:
                 print("Ingen importer ennå.")
+        elif choice == '4':
+            self._export_report()
     
     def combined_analysis(self):
         """Kombinerte analyser."""
@@ -573,7 +575,13 @@ class HRCLI:
             countries = self.analytics.employees_by_country()
             print("\nTilgjengelige land:", ", ".join(countries.keys()))
             print("Velg land:")
-            country = input("> ").strip()
+            country_input = input("> ").strip()
+            # Finn riktig land med case-insensitive matching
+            country = None
+            for c in countries:
+                if c.lower() == country_input.lower():
+                    country = c
+                    break
             
             if country:
                 summary = self.analytics.combined_summary(country=country)
@@ -789,6 +797,24 @@ class HRCLI:
                 for jf, data in by_gender.items()
             ]
             print_table(headers, rows, [27, 8, 8, 10, 12])
+    
+    def _export_report(self):
+        """Eksporter HR-rapport som PDF."""
+        if not self._check_data():
+            return
+        
+        print("\nGenererer PDF-rapport...")
+        print("(Standardplassering: rapporter/hr_rapport_DATO.pdf)")
+        print("\nAngi filsti (eller trykk Enter for standard):")
+        custom_path = input("> ").strip()
+        
+        output_path = custom_path if custom_path else None
+        
+        try:
+            path = generate_report(self.analytics, output_path=output_path)
+            print(f"\n✓ Rapport generert: {path}")
+        except Exception as e:
+            print(f"\n✗ Feil ved generering av rapport: {e}")
     
     def _check_data(self) -> bool:
         """Sjekk om det finnes data i databasen."""

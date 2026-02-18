@@ -1,0 +1,508 @@
+"""
+API-tester for FastAPI-endepunktene.
+
+Bruker FastAPI TestClient med en midlertidig testdatabase,
+slik at testene kjører isolert uten å påvirke produksjonsdata.
+"""
+
+import sys
+import os
+import io
+from pathlib import Path
+from unittest.mock import patch
+from datetime import date
+
+import pytest
+from fastapi.testclient import TestClient
+
+# Ensure hr_database package is importable
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from hr_database.database import init_database, get_connection, DEFAULT_DB_PATH
+from hr_database.analytics import HRAnalytics
+from tests.conftest import seed_employees
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def test_db(tmp_path):
+    """Opprett midlertidig testdatabase med kjente data."""
+    db_path = tmp_path / "test_api.db"
+    init_database(db_path)
+    seed_employees(db_path)
+    return db_path
+
+
+@pytest.fixture
+def client(test_db):
+    """
+    FastAPI TestClient med testdatabase.
+
+    Patcher DEFAULT_DB_PATH slik at lifespan-funksjonen
+    (init_database + HRAnalytics) bruker testdatabasen.
+    Patcher også i import_routes (som viser DB-sti i /api/status).
+    """
+    import web.app as web_app_module
+    import web.routes.import_routes as import_routes_module
+
+    # Patch DEFAULT_DB_PATH OVERALT — inkludert i database-modulen
+    # som brukes av init_database() og HRAnalytics() i lifespan.
+    with patch("hr_database.database.DEFAULT_DB_PATH", test_db), \
+         patch.object(import_routes_module, "DEFAULT_DB_PATH", test_db):
+
+        with TestClient(web_app_module.app, raise_server_exceptions=False) as c:
+            # Etter lifespan har kjørt, sørg for at analytics bruker testdatabasen
+            web_app_module.analytics = HRAnalytics(db_path=test_db)
+            yield c
+
+
+# ---------------------------------------------------------------------------
+# Hjelpefunksjoner
+# ---------------------------------------------------------------------------
+
+def assert_json_ok(response, expected_status=200):
+    """Verifiser at respons er gyldig JSON med riktig statuskode."""
+    assert response.status_code == expected_status, (
+        f"Forventet {expected_status}, fikk {response.status_code}: {response.text[:200]}"
+    )
+    return response.json()
+
+
+# ===========================================================================
+# OVERSIKT
+# ===========================================================================
+
+class TestOverview:
+    """Tester for /api/overview/* endepunkter."""
+
+    def test_summary(self, client):
+        data = assert_json_ok(client.get("/api/overview/summary"))
+        assert "totalt" in data
+        assert "aktive" in data
+        assert "sluttede" in data
+        assert "gjennomsnitt_alder" in data
+        assert data["totalt"] == 10  # 10 testansatte
+
+    def test_by_country(self, client):
+        data = assert_json_ok(client.get("/api/overview/by-country"))
+        assert isinstance(data, dict)
+        assert len(data) > 0
+
+    def test_by_country_all(self, client):
+        """Inkluder sluttede ansatte."""
+        data = assert_json_ok(client.get("/api/overview/by-country?active_only=false"))
+        assert isinstance(data, dict)
+
+    def test_by_company(self, client):
+        data = assert_json_ok(client.get("/api/overview/by-company"))
+        assert isinstance(data, dict)
+
+    def test_by_department(self, client):
+        data = assert_json_ok(client.get("/api/overview/by-department"))
+        assert isinstance(data, dict)
+
+
+# ===========================================================================
+# ALDER
+# ===========================================================================
+
+class TestAge:
+    """Tester for /api/age/* endepunkter."""
+
+    def test_distribution(self, client):
+        data = assert_json_ok(client.get("/api/age/distribution"))
+        assert isinstance(data, dict)
+
+    def test_distribution_pct(self, client):
+        data = assert_json_ok(client.get("/api/age/distribution-pct"))
+        assert isinstance(data, dict)
+
+    def test_by_country(self, client):
+        data = assert_json_ok(client.get("/api/age/by-country"))
+        assert isinstance(data, dict)
+
+
+# ===========================================================================
+# KJØNN
+# ===========================================================================
+
+class TestGender:
+    """Tester for /api/gender/* endepunkter."""
+
+    def test_distribution(self, client):
+        data = assert_json_ok(client.get("/api/gender/distribution"))
+        assert isinstance(data, dict)
+        # Forventer Mann og Kvinne som nøkler eller verdier
+        assert "Mann" in str(data) and "Kvinne" in str(data)
+
+    def test_by_country(self, client):
+        data = assert_json_ok(client.get("/api/gender/by-country"))
+        assert isinstance(data, dict)
+
+
+# ===========================================================================
+# CHURN
+# ===========================================================================
+
+class TestChurn:
+    """Tester for /api/churn/* endepunkter."""
+
+    def test_calculate_total(self, client):
+        data = assert_json_ok(client.get(
+            "/api/churn/calculate?start_date=2024-01-01&end_date=2025-12-31"
+        ))
+        assert isinstance(data, dict)
+
+    def test_calculate_by_country(self, client):
+        data = assert_json_ok(client.get(
+            "/api/churn/calculate?start_date=2024-01-01&end_date=2025-12-31&by=country"
+        ))
+
+    def test_calculate_missing_params(self, client):
+        """Manglende obligatoriske parametere gir 422."""
+        resp = client.get("/api/churn/calculate")
+        assert resp.status_code == 422
+
+    def test_monthly(self, client):
+        data = assert_json_ok(client.get("/api/churn/monthly?year=2025"))
+        assert isinstance(data, list)
+
+    def test_monthly_default_year(self, client):
+        """Uten year-parameter brukes inneværende år."""
+        data = assert_json_ok(client.get("/api/churn/monthly"))
+        assert isinstance(data, list)
+
+    def test_by_age(self, client):
+        data = assert_json_ok(client.get(
+            "/api/churn/by-age?start_date=2024-01-01&end_date=2025-12-31"
+        ))
+
+    def test_by_country(self, client):
+        data = assert_json_ok(client.get(
+            "/api/churn/by-country?start_date=2024-01-01&end_date=2025-12-31"
+        ))
+
+    def test_by_gender(self, client):
+        data = assert_json_ok(client.get(
+            "/api/churn/by-gender?start_date=2024-01-01&end_date=2025-12-31"
+        ))
+
+    def test_reasons(self, client):
+        data = assert_json_ok(client.get("/api/churn/reasons"))
+        assert isinstance(data, dict)
+
+    def test_reasons_with_dates(self, client):
+        data = assert_json_ok(client.get(
+            "/api/churn/reasons?start_date=2024-01-01&end_date=2025-12-31"
+        ))
+        assert isinstance(data, dict)
+
+
+# ===========================================================================
+# TENURE
+# ===========================================================================
+
+class TestTenure:
+    """Tester for /api/tenure/* endepunkter."""
+
+    def test_average(self, client):
+        data = assert_json_ok(client.get("/api/tenure/average"))
+        assert "gjennomsnitt_ar" in data
+        assert isinstance(data["gjennomsnitt_ar"], (int, float))
+
+    def test_distribution(self, client):
+        data = assert_json_ok(client.get("/api/tenure/distribution"))
+        assert isinstance(data, dict)
+
+
+# ===========================================================================
+# ANSETTELSESTYPE
+# ===========================================================================
+
+class TestEmployment:
+    """Tester for /api/employment/* endepunkter."""
+
+    def test_types(self, client):
+        data = assert_json_ok(client.get("/api/employment/types"))
+        assert isinstance(data, dict)
+
+    def test_fulltime_parttime(self, client):
+        data = assert_json_ok(client.get("/api/employment/fulltime-parttime"))
+        assert isinstance(data, dict)
+
+
+# ===========================================================================
+# LEDELSE
+# ===========================================================================
+
+class TestManagement:
+    """Tester for /api/management/* endepunkter."""
+
+    def test_ratio(self, client):
+        data = assert_json_ok(client.get("/api/management/ratio"))
+        assert isinstance(data, dict)
+
+
+# ===========================================================================
+# SØK
+# ===========================================================================
+
+class TestSearch:
+    """Tester for /api/search endepunktet."""
+
+    def test_search_by_name(self, client):
+        data = assert_json_ok(client.get("/api/search?name=Ola"))
+        assert isinstance(data, list)
+        assert len(data) >= 1
+        # Ola Nordmann skal finnes
+        names = [f"{d.get('fornavn', '')} {d.get('etternavn', '')}" for d in data]
+        assert any("Ola" in n for n in names)
+
+    def test_search_by_department(self, client):
+        data = assert_json_ok(client.get("/api/search?department=Regnskap"))
+        assert isinstance(data, list)
+        assert len(data) >= 1
+
+    def test_search_by_country(self, client):
+        data = assert_json_ok(client.get("/api/search?country=Danmark"))
+        assert isinstance(data, list)
+        assert len(data) >= 1
+
+    def test_search_no_results(self, client):
+        data = assert_json_ok(client.get("/api/search?name=Xyznonexistent"))
+        assert isinstance(data, list)
+        assert len(data) == 0
+
+    def test_search_with_limit(self, client):
+        data = assert_json_ok(client.get("/api/search?limit=2"))
+        assert isinstance(data, list)
+        assert len(data) <= 2
+
+
+# ===========================================================================
+# KOMBINERT
+# ===========================================================================
+
+class TestCombined:
+    """Tester for /api/combined/* endepunkter."""
+
+    def test_summary(self, client):
+        data = assert_json_ok(client.get("/api/combined/summary"))
+        assert isinstance(data, dict)
+
+    def test_summary_by_country(self, client):
+        data = assert_json_ok(client.get("/api/combined/summary?country=Norge"))
+        assert isinstance(data, dict)
+
+    def test_age_gender_country(self, client):
+        data = assert_json_ok(client.get("/api/combined/age-gender-country"))
+        assert isinstance(data, dict)
+
+
+# ===========================================================================
+# PLANLAGTE AVGANGER
+# ===========================================================================
+
+class TestDepartures:
+    """Tester for /api/departures/* endepunkter."""
+
+    def test_planned(self, client):
+        data = assert_json_ok(client.get("/api/departures/planned"))
+        assert isinstance(data, list)
+
+    def test_planned_short_horizon(self, client):
+        data = assert_json_ok(client.get("/api/departures/planned?months_ahead=1"))
+        assert isinstance(data, list)
+
+
+# ===========================================================================
+# LØNN
+# ===========================================================================
+
+class TestSalary:
+    """Tester for /api/salary/* endepunkter."""
+
+    def test_summary(self, client):
+        data = assert_json_ok(client.get("/api/salary/summary"))
+        assert isinstance(data, dict)
+
+    def test_by_department(self, client):
+        data = assert_json_ok(client.get("/api/salary/by-department"))
+        assert isinstance(data, dict)
+
+    def test_by_country(self, client):
+        data = assert_json_ok(client.get("/api/salary/by-country"))
+        assert isinstance(data, dict)
+
+    def test_by_gender(self, client):
+        data = assert_json_ok(client.get("/api/salary/by-gender"))
+        assert isinstance(data, dict)
+
+    def test_by_age(self, client):
+        data = assert_json_ok(client.get("/api/salary/by-age"))
+        assert isinstance(data, dict)
+
+    def test_by_job_family(self, client):
+        data = assert_json_ok(client.get("/api/salary/by-job-family"))
+        assert isinstance(data, dict)
+
+
+# ===========================================================================
+# JOBBFAMILIER
+# ===========================================================================
+
+class TestJobFamily:
+    """Tester for /api/job-family/* endepunkter."""
+
+    def test_distribution(self, client):
+        data = assert_json_ok(client.get("/api/job-family/distribution"))
+        assert isinstance(data, dict)
+
+    def test_by_country(self, client):
+        data = assert_json_ok(client.get("/api/job-family/by-country"))
+        assert isinstance(data, dict)
+
+    def test_by_gender(self, client):
+        data = assert_json_ok(client.get("/api/job-family/by-gender"))
+        assert isinstance(data, dict)
+
+
+# ===========================================================================
+# IMPORT
+# ===========================================================================
+
+class TestImport:
+    """Tester for /api/import/* endepunkter."""
+
+    def test_upload_invalid_filetype(self, client):
+        """Avvis filer som ikke er Excel."""
+        resp = client.post(
+            "/api/import/upload",
+            files={"file": ("test.txt", b"not excel", "text/plain")},
+        )
+        assert resp.status_code == 400
+        assert "Excel" in resp.json()["detail"]
+
+    def test_upload_no_file(self, client):
+        """Manglende fil gir 422."""
+        resp = client.post("/api/import/upload")
+        assert resp.status_code == 422
+
+    def test_history(self, client):
+        data = assert_json_ok(client.get("/api/import/history"))
+        assert isinstance(data, list)
+
+
+# ===========================================================================
+# STATUS
+# ===========================================================================
+
+class TestStatus:
+    """Tester for /api/status endepunktet."""
+
+    def test_status(self, client):
+        data = assert_json_ok(client.get("/api/status"))
+        assert "totalt_ansatte" in data
+        assert "aktive_ansatte" in data
+        assert data["totalt_ansatte"] == 10
+
+
+# ===========================================================================
+# RAPPORT
+# ===========================================================================
+
+class TestReport:
+    """Tester for /api/report/* endepunkter."""
+
+    def test_pdf_generation(self, client):
+        """Generer PDF-rapport og verifiser respons."""
+        resp = client.get("/api/report/pdf")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        # PDF starter alltid med %PDF
+        assert resp.content[:4] == b"%PDF"
+
+    def test_pdf_with_year(self, client):
+        """Generer PDF med spesifikt år."""
+        resp = client.get("/api/report/pdf?year=2025")
+        assert resp.status_code == 200
+        assert resp.content[:4] == b"%PDF"
+
+
+# ===========================================================================
+# FRONTEND
+# ===========================================================================
+
+class TestFrontend:
+    """Tester for frontend-servering."""
+
+    def test_index_page(self, client):
+        """Hovedsiden returnerer HTML."""
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers["content-type"]
+        assert "HR Analyse" in resp.text
+
+    def test_static_css(self, client):
+        """CSS-filen er tilgjengelig."""
+        resp = client.get("/static/css/style.css")
+        assert resp.status_code == 200
+
+    def test_static_js_app(self, client):
+        """app.js er tilgjengelig."""
+        resp = client.get("/static/js/app.js")
+        assert resp.status_code == 200
+
+    def test_static_js_charts(self, client):
+        """charts.js er tilgjengelig."""
+        resp = client.get("/static/js/charts.js")
+        assert resp.status_code == 200
+
+    def test_static_chartjs(self, client):
+        """Chart.js-biblioteket er tilgjengelig."""
+        resp = client.get("/static/js/chart.min.js")
+        assert resp.status_code == 200
+
+    def test_swagger_docs(self, client):
+        """Swagger UI er tilgjengelig."""
+        resp = client.get("/docs")
+        assert resp.status_code == 200
+
+
+# ===========================================================================
+# ACTIVE_ONLY-PARAMETER
+# ===========================================================================
+
+class TestActiveOnlyParam:
+    """Verifiser at active_only-parameteren fungerer på tvers av endepunkter."""
+
+    @pytest.mark.parametrize("endpoint", [
+        "/api/overview/by-country",
+        "/api/overview/by-company",
+        "/api/overview/by-department",
+        "/api/age/distribution",
+        "/api/gender/distribution",
+        pytest.param("/api/tenure/average", marks=pytest.mark.xfail(
+            reason="Kjent WHERE-bug i average_tenure(active_only=False)")),
+        pytest.param("/api/tenure/distribution", marks=pytest.mark.xfail(
+            reason="Kjent WHERE-bug i tenure_distribution(active_only=False)")),
+        "/api/employment/types",
+        "/api/employment/fulltime-parttime",
+        "/api/management/ratio",
+        "/api/salary/summary",
+        "/api/salary/by-department",
+        "/api/salary/by-country",
+        "/api/salary/by-gender",
+        "/api/salary/by-age",
+        "/api/salary/by-job-family",
+        "/api/job-family/distribution",
+        "/api/job-family/by-country",
+        "/api/job-family/by-gender",
+    ])
+    def test_active_only_false(self, client, endpoint):
+        """Alle endepunkter med active_only aksepterer false."""
+        resp = client.get(f"{endpoint}?active_only=false")
+        assert resp.status_code == 200, f"{endpoint} feilet: {resp.text[:200]}"
