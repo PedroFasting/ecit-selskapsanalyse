@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Query, HTTPException
 
 from hr_database import import_excel, list_imports, init_database
+from hr_database.importer import ImportResult
 from hr_database.database import DEFAULT_DB_PATH, get_connection
 from web.app import get_analytics
 
@@ -41,7 +42,7 @@ async def upload_excel(
         with open(tmp_path, "wb") as f:
             f.write(content)
 
-        antall = import_excel(
+        result = import_excel(
             filepath=tmp_path,
             clear_existing=clear_existing,
             verbose=False,
@@ -51,12 +52,22 @@ async def upload_excel(
         import web.app
         web.app.analytics = type(web.app.analytics)(web.app.analytics.db_path)
 
-        return {
+        response = {
             "status": "ok",
-            "melding": f"Importerte {antall} rader fra {file.filename}",
-            "antall_rader": antall,
+            "melding": f"Importerte {result.imported} rader fra {file.filename}",
+            "antall_rader": result.imported,
             "filnavn": file.filename,
+            "validering": {
+                "matchede_kolonner": len(result.validation.matched_columns),
+                "totalt_forventede": len(result.validation.matched_columns) + len(result.validation.missing_columns),
+                "match_prosent": round(result.validation.match_ratio * 100),
+                "manglende": result.validation.missing_columns,
+            },
         }
+        if result.warnings:
+            response["advarsler"] = result.warnings
+
+        return response
 
     except Exception as e:
         raise HTTPException(

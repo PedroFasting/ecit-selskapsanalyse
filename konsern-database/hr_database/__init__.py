@@ -8,7 +8,7 @@ Moduler:
 """
 
 from .database import init_database, get_connection, reset_database
-from .importer import import_excel, list_imports
+from .importer import import_excel, list_imports, ImportResult, ImportValidation
 from .analytics import HRAnalytics, get_analytics
 from .report_generator import generate_report
 
@@ -19,6 +19,8 @@ __all__ = [
     'reset_database',
     'import_excel',
     'list_imports',
+    'ImportResult',
+    'ImportValidation',
     'HRAnalytics',
     'get_analytics',
     'generate_report',

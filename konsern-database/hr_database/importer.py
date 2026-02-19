@@ -5,6 +5,7 @@ Leser VerismoHR-eksporter og lagrer i database.
 
 import pandas as pd
 import sqlite3
+from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -68,6 +69,76 @@ COLUMN_MAPPING = {
 }
 
 
+@dataclass
+class ImportValidation:
+    """Resultat av kolonnevalidering mot COLUMN_MAPPING."""
+    matched_columns: list[str]      # Excel-kolonner som ble gjenkjent
+    missing_columns: list[str]      # Forventede kolonner som ikke finnes i Excel
+    unknown_columns: list[str]      # Kolonner i Excel som ikke er i mappingen
+    match_ratio: float              # Andel matchede kolonner (0.0 - 1.0)
+
+
+@dataclass
+class ImportResult:
+    """Samlet resultat fra en Excel-import."""
+    imported: int                   # Antall importerte rader
+    errors: int                     # Antall rader med feil
+    validation: ImportValidation    # Kolonnevalidering
+    warnings: list[str] = field(default_factory=list)
+
+
+def validate_columns(actual_columns: pd.Index) -> ImportValidation:
+    """
+    Valider Excel-kolonner mot COLUMN_MAPPING.
+    Returnerer info om matchede, manglende og ukjente kolonner.
+    """
+    actual_set = set(str(c) for c in actual_columns if c is not None and str(c).strip())
+    expected_set = set(COLUMN_MAPPING.keys())
+
+    matched = sorted(actual_set & expected_set)
+    missing = sorted(expected_set - actual_set)
+    unknown = sorted(actual_set - expected_set)
+
+    total_expected = len(expected_set)
+    ratio = len(matched) / total_expected if total_expected > 0 else 0.0
+
+    return ImportValidation(
+        matched_columns=matched,
+        missing_columns=missing,
+        unknown_columns=unknown,
+        match_ratio=ratio,
+    )
+
+
+def build_warnings(validation: ImportValidation) -> list[str]:
+    """
+    Bygg advarselsliste basert på kolonnevalidering.
+    Aldri blokkér — alltid informér.
+    """
+    warnings: list[str] = []
+    total = len(validation.matched_columns) + len(validation.missing_columns)
+
+    if validation.match_ratio == 0.0:
+        warnings.append(
+            f"Ingen av {total} forventede kolonner ble gjenkjent. "
+            f"Alle rader ble importert med tom data. Er dette en VerismoHR-eksport?"
+        )
+    elif validation.match_ratio < 0.5:
+        warnings.append(
+            f"Kun {len(validation.matched_columns)}/{total} kolonner gjenkjent "
+            f"({validation.match_ratio:.0%}). Mye data vil mangle."
+        )
+    elif validation.missing_columns:
+        missing_display = validation.missing_columns[:5]
+        suffix = f" og {len(validation.missing_columns) - 5} til" if len(validation.missing_columns) > 5 else ""
+        warnings.append(
+            f"{len(validation.missing_columns)} kolonner mangler: "
+            f"{', '.join(missing_display)}{suffix}"
+        )
+
+    return warnings
+
+
 def parse_date(value) -> Optional[str]:
     """
     Konverter diverse datoformater til ISO-format (YYYY-MM-DD).
@@ -121,9 +192,12 @@ def import_excel(
     db_path: Optional[Path] = None,
     clear_existing: bool = False,
     verbose: bool = True
-) -> int:
+) -> ImportResult:
     """
     Importer ansattdata fra Excel-fil til database.
+    
+    Importen blokkeres aldri basert på kolonnevalidering.
+    Valideringsinfo returneres alltid slik at kalleren kan informere brukeren.
     
     Args:
         filepath: Sti til Excel-filen
@@ -132,7 +206,7 @@ def import_excel(
         verbose: Vis detaljert output
         
     Returns:
-        Antall importerte rader
+        ImportResult med antall rader, feil, validering og advarsler
     """
     filepath = Path(filepath)
     
@@ -147,6 +221,22 @@ def import_excel(
     
     if verbose:
         print(f"  Leste {len(df)} rader fra Excel")
+    
+    # Valider kolonner — informér, aldri blokkér
+    validation = validate_columns(df.columns)
+    warnings = build_warnings(validation)
+    
+    if verbose:
+        matched = len(validation.matched_columns)
+        total = matched + len(validation.missing_columns)
+        if validation.match_ratio == 1.0:
+            print(f"  Alle {matched} kolonner gjenkjent")
+        else:
+            print(f"  {matched}/{total} kolonner gjenkjent ({validation.match_ratio:.0%})")
+            if validation.missing_columns:
+                print(f"  Mangler: {', '.join(validation.missing_columns[:10])}")
+        for w in warnings:
+            print(f"  Advarsel: {w}")
     
     # Initialiser database om nødvendig
     init_database(db_path)
@@ -244,7 +334,12 @@ def import_excel(
         if errors > 0:
             print(f"  Feil: {errors}")
     
-    return imported
+    return ImportResult(
+        imported=imported,
+        errors=errors,
+        validation=validation,
+        warnings=warnings,
+    )
 
 
 def list_imports(db_path: Optional[Path] = None) -> list:

@@ -265,6 +265,13 @@ main {
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
+.chart-container .no-data {
+    color: var(--text-light);
+    font-size: 14px;
+    text-align: center;
+    padding: 48px 16px;
+    margin: 0;
+}
 
 /* Chart header (title + action buttons) */
 .chart-header {
@@ -441,6 +448,38 @@ tr:hover td { background: var(--beige-light); }
     background: var(--beige);
     color: var(--navy);
     border: 1px solid var(--cream);
+}
+#import-status.warning {
+    display: block;
+    background: #fff8e1;
+    color: #7a5d00;
+    border: 1px solid #ffe082;
+}
+
+.import-warnings {
+    margin-top: 8px;
+    padding: 12px 16px;
+    background: #fff8e1;
+    border: 1px solid #ffe082;
+    border-radius: var(--radius);
+    font-size: 13px;
+    color: #7a5d00;
+    display: none;
+}
+.import-warnings.visible {
+    display: block;
+}
+.import-warnings ul {
+    margin: 6px 0 0 16px;
+    padding: 0;
+}
+.import-warnings li {
+    margin-bottom: 4px;
+}
+.import-match-info {
+    margin-top: 4px;
+    font-size: 12px;
+    opacity: 0.85;
 }
 
 .import-history {

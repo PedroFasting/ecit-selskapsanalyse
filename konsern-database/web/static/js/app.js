@@ -7,6 +7,28 @@ const tabLoaded = {};  // Holder styr på hvilke tabs som har lastet data
 
 // === API HELPERS ===
 
+/** Sjekk om et API-svar har data (ikke null, ikke tomt objekt). */
+function hasData(obj) {
+    return obj && typeof obj === 'object' && Object.keys(obj).length > 0;
+}
+
+/** Vis «Ingen data»-melding i en chart-container. */
+function showNoData(canvasId, melding = 'Ingen data tilgjengelig') {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const container = canvas.closest('.chart-container');
+    if (!container) return;
+    // Fjern eksisterende no-data-melding
+    const existing = container.querySelector('.no-data');
+    if (existing) existing.remove();
+    // Skjul canvas og vis melding
+    canvas.style.display = 'none';
+    const msg = document.createElement('p');
+    msg.className = 'no-data';
+    msg.textContent = melding;
+    container.appendChild(msg);
+}
+
 async function fetchData(url) {
     showLoader();
     try {
@@ -331,31 +353,41 @@ async function loadLonn() {
         `;
     }
 
-    if (byDept) {
+    if (hasData(byDept)) {
         const labels = Object.keys(byDept);
         const avgs = labels.map(k => byDept[k].gjennomsnitt);
         renderHorizontalBarChart('chart-salary-dept', labels, avgs, { colors: COLORS.primary });
+    } else {
+        showNoData('chart-salary-dept');
     }
-    if (byCountry) {
+    if (hasData(byCountry)) {
         const labels = Object.keys(byCountry);
         const avgs = labels.map(k => byCountry[k].gjennomsnitt);
         renderBarChart('chart-salary-country', labels, avgs, { colors: COLORS.accent });
+    } else {
+        showNoData('chart-salary-country');
     }
-    if (byGender) {
+    if (byGender && Object.keys(byGender).filter(k => !k.startsWith('lønn')).length > 0) {
         const labels = Object.keys(byGender).filter(k => !k.startsWith('lønn'));
         const avgs = labels.map(k => byGender[k].gjennomsnitt);
         const colors = labels.map(l => l === 'Mann' ? COLORS.male : l === 'Kvinne' ? COLORS.female : COLORS.unknown);
         renderBarChart('chart-salary-gender', labels, avgs, { colors });
+    } else {
+        showNoData('chart-salary-gender');
     }
-    if (byAge) {
+    if (hasData(byAge)) {
         const labels = Object.keys(byAge);
         const avgs = labels.map(k => byAge[k].gjennomsnitt);
         renderBarChart('chart-salary-age', labels, avgs, { colors: COLORS.secondary });
+    } else {
+        showNoData('chart-salary-age');
     }
-    if (byJobFam) {
+    if (hasData(byJobFam)) {
         const labels = Object.keys(byJobFam);
         const avgs = labels.map(k => byJobFam[k].gjennomsnitt);
         renderHorizontalBarChart('chart-salary-jobfam', labels, avgs);
+    } else {
+        showNoData('chart-salary-jobfam');
     }
 }
 
@@ -478,6 +510,10 @@ async function uploadFile(file) {
     statusEl.style.display = 'block';
     statusEl.textContent = `Importerer ${file.name}...`;
 
+    // Fjern tidligere advarsler
+    const oldWarnings = document.getElementById('import-warnings');
+    if (oldWarnings) oldWarnings.remove();
+
     const formData = new FormData();
     formData.append('file', file);
     const clearExisting = document.getElementById('import-clear').checked;
@@ -492,7 +528,30 @@ async function uploadFile(file) {
         if (res.ok) {
             statusEl.className = 'success';
             statusEl.style.display = 'block';
-            statusEl.textContent = data.melding;
+
+            // Vis melding med match-info
+            let statusText = data.melding;
+            if (data.validering) {
+                const v = data.validering;
+                statusText += ` (${v.matchede_kolonner}/${v.totalt_forventede} kolonner gjenkjent)`;
+            }
+            statusEl.textContent = statusText;
+
+            // Vis advarsler hvis de finnes
+            if (data.advarsler && data.advarsler.length > 0) {
+                statusEl.className = 'warning';
+                const warningsEl = document.createElement('div');
+                warningsEl.id = 'import-warnings';
+                warningsEl.className = 'import-warnings visible';
+                const list = data.advarsler.map(w => `<li>${w}</li>`).join('');
+                warningsEl.innerHTML = `<strong>Advarsler:</strong><ul>${list}</ul>`;
+                if (data.validering && data.validering.manglende.length > 0) {
+                    const missing = data.validering.manglende.join(', ');
+                    warningsEl.innerHTML += `<div class="import-match-info">Manglende kolonner: ${missing}</div>`;
+                }
+                statusEl.parentNode.insertBefore(warningsEl, statusEl.nextSibling);
+            }
+
             // Oppdater status og reload oversikt
             Object.keys(tabLoaded).forEach(k => delete tabLoaded[k]);
             await init();

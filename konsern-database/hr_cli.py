@@ -194,8 +194,10 @@ class HRCLI:
         clear = input("> ").strip().lower() == 'j'
         
         try:
-            count = import_excel(filepath, clear_existing=clear, verbose=True)
-            print(f"\n✓ Importert {count} ansatte")
+            result = import_excel(filepath, clear_existing=clear, verbose=True)
+            print(f"\n✓ Importert {result.imported} ansatte")
+            for warning in result.warnings:
+                print(f"  ⚠ {warning}")
             self._init_analytics()
         except Exception as e:
             print(f"\n✗ Feil ved import: {e}")

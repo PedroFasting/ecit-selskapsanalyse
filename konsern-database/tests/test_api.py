@@ -8,6 +8,7 @@ slik at testene kjører isolert uten å påvirke produksjonsdata.
 import sys
 import os
 import io
+import openpyxl
 from pathlib import Path
 from unittest.mock import patch
 from datetime import date
@@ -394,6 +395,56 @@ class TestImport:
     def test_history(self, client):
         data = assert_json_ok(client.get("/api/import/history"))
         assert isinstance(data, list)
+
+    def _make_excel(self, headers, rows=None):
+        """Lag en minimal Excel-fil i minnet med gitt header-rad."""
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        # Row 1: category header (ignored by importer, which reads header=1)
+        ws.append(["Grunnleggende informasjon"] + [None] * (len(headers) - 1))
+        # Row 2: actual column headers
+        ws.append(headers)
+        # Row 3+: data rows
+        if rows:
+            for row in rows:
+                ws.append(row)
+        else:
+            ws.append([f"val{i}" for i in range(len(headers))])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return buf.getvalue()
+
+    def test_upload_returns_validation(self, client):
+        """Suksessfull import returnerer valideringsinfo."""
+        excel = self._make_excel(["Fornavn", "Etternavn", "Medarbeidernummer"],
+                                 [["Ola", "Nordmann", "TEST001"]])
+        resp = client.post(
+            "/api/import/upload",
+            files={"file": ("test.xlsx", excel,
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        data = assert_json_ok(resp)
+        assert "validering" in data
+        v = data["validering"]
+        assert v["matchede_kolonner"] == 3
+        assert v["match_prosent"] > 0
+        assert isinstance(v["manglende"], list)
+
+    def test_upload_partial_match_has_warnings(self, client):
+        """Delvis match gir advarsler i respons."""
+        # Only 2 of ~52 expected columns => very low match => warning
+        excel = self._make_excel(["Fornavn", "Etternavn"],
+                                 [["Ola", "Nordmann"]])
+        resp = client.post(
+            "/api/import/upload",
+            files={"file": ("partial.xlsx", excel,
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        data = assert_json_ok(resp)
+        assert "advarsler" in data
+        assert len(data["advarsler"]) > 0
+        assert data["validering"]["match_prosent"] < 50
 
 
 # ===========================================================================
