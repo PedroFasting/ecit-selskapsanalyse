@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HR Analyse &mdash; ECIT</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=5">
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <div class="header-brand">
+                <svg fill="currentColor" viewBox="0 0 135 60" xmlns="http://www.w3.org/2000/svg" class="logo" aria-label="ECIT"><path d="M12.438 31.2701C12.7007 27.7664 14.7153 21.635 22.7737 21.635C28.8175 21.635 31.5328 24.9635 32.6715 31.2701H12.438ZM45.1095 39.1533C46.073 25.2263 38.5401 12.2628 23.1241 12.2628C9.37226 12.2628 0 22.5985 0 36.1752C0 50.1898 8.84672 60 23.1241 60C33.3723 60 40.8175 55.5328 44.3212 44.7591H33.3723C32.5839 47.562 28.5547 50.6277 23.562 50.6277C16.5547 50.6277 12.7883 47.1241 12.438 39.1533H45.1095Z"></path><path d="M94.3849 29.4307C93.6841 17.8686 83.7863 12.2628 73.1002 12.2628C58.3849 12.2628 49.9761 22.6861 49.9761 36.7883C49.9761 50.365 59.1732 60 72.8374 60C84.8374 60 92.9834 53.4307 94.6476 41.4307H82.6476C81.8593 47.0365 78.6184 50.6277 72.7498 50.6277C64.9542 50.6277 62.4141 42.9197 62.4141 36.3504C62.4141 29.6934 65.0418 21.635 73.0126 21.635C78.3557 21.635 81.4214 24.2628 82.2097 29.4307H94.3849Z"></path><path d="M100.901 5.63466H106.42V0.114198H100.901V5.63466ZM100.901 58.7737H106.42V13.5766H100.901V58.7737Z"></path><path d="M125.74 0H120.221V13.5766H112.338V18.219H120.221V49.1387C120.134 56.8467 122.674 59.2993 130.032 59.2993C131.696 59.2993 133.272 59.1241 134.937 59.1241V54.3942C133.36 54.5693 131.783 54.6569 130.207 54.6569C126.265 54.3942 125.74 52.292 125.74 48.7007V18.219H134.937V13.5766H125.74V0Z"></path></svg>
+                <div class="divider"></div>
+                <span class="app-name">HR Analyse</span>
+            </div>
+            <div class="header-actions">
+                <span id="status-badge" class="badge">Laster...</span>
+                <button id="btn-pdf" class="btn btn-primary" onclick="downloadPDF()">Last ned PDF</button>
+            </div>
+        </div>
+    </header>
+
+    <nav id="tab-nav">
+        <button class="tab active" data-tab="oversikt">Oversikt</button>
+        <button class="tab" data-tab="alder">Alder</button>
+        <button class="tab" data-tab="geografi">Geografi</button>
+        <button class="tab" data-tab="kjonn">Kj&oslash;nn</button>
+        <button class="tab" data-tab="churn">Churn</button>
+        <button class="tab" data-tab="tenure">Tenure</button>
+        <button class="tab" data-tab="lonn">L&oslash;nn</button>
+        <button class="tab" data-tab="jobbfamilier">Jobbfamilier</button>
+        <button class="tab" data-tab="analyse">Analyse</button>
+        <button class="tab" data-tab="sok">S&oslash;k</button>
+        <button class="tab" data-tab="import">Import</button>
+    </nav>
+
+    <main>
+        <!-- OVERSIKT -->
+        <section id="tab-oversikt" class="tab-content active">
+            <div class="cards" id="overview-cards"></div>
+            <div class="grid-2">
+                <div class="chart-container">
+                    <h3>Ansatte per land</h3>
+                    <canvas id="chart-by-country"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>Ansatte per selskap</h3>
+                    <canvas id="chart-by-company"></canvas>
+                </div>
+            </div>
+            <div class="grid-2">
+                <div class="chart-container">
+                    <h3>Ansettelsestyper</h3>
+                    <canvas id="chart-employment-types"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>Heltid vs deltid</h3>
+                    <canvas id="chart-fulltime-parttime"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- ALDER -->
+        <section id="tab-alder" class="tab-content">
+            <div class="grid-2">
+                <div class="chart-container">
+                    <h3>Aldersfordeling</h3>
+                    <canvas id="chart-age-dist"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>Aldersfordeling (%)</h3>
+                    <canvas id="chart-age-pct"></canvas>
+                </div>
+            </div>
+            <div class="chart-container">
+                <h3>Alder per land</h3>
+                <canvas id="chart-age-country"></canvas>
+            </div>
+        </section>
+
+        <!-- GEOGRAFI -->
+        <section id="tab-geografi" class="tab-content">
+            <div class="chart-container">
+                <h3>Ansatte per land</h3>
+                <canvas id="chart-geo-country"></canvas>
+            </div>
+            <div class="grid-2">
+                <div class="chart-container">
+                    <h3>Per selskap</h3>
+                    <canvas id="chart-geo-company"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>Per avdeling</h3>
+                    <canvas id="chart-geo-department"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- KJ&Oslash;NN -->
+        <section id="tab-kjonn" class="tab-content">
+            <div class="grid-2">
+                <div class="chart-container">
+                    <h3>Kj&oslash;nnsfordeling</h3>
+                    <canvas id="chart-gender-dist"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>Kj&oslash;nn per land</h3>
+                    <canvas id="chart-gender-country"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- CHURN -->
+        <section id="tab-churn" class="tab-content">
+            <div class="controls">
+                <label>
+                    Fra:
+                    <input type="date" id="churn-start">
+                </label>
+                <label>
+                    Til:
+                    <input type="date" id="churn-end">
+                </label>
+                <button class="btn btn-secondary" onclick="loadChurnPeriod()">Beregn periode</button>
+            </div>
+            <div id="churn-summary-cards" class="cards"></div>
+            <div class="chart-container">
+                <h3>M&aring;nedlig churn</h3>
+                <canvas id="chart-churn-monthly"></canvas>
+            </div>
+            <div class="grid-2">
+                <div class="chart-container">
+                    <h3>Churn per aldersgruppe</h3>
+                    <canvas id="chart-churn-age"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>Churn per land</h3>
+                    <canvas id="chart-churn-country"></canvas>
+                </div>
+            </div>
+            <div class="grid-2">
+                <div class="chart-container">
+                    <h3>Churn per kj&oslash;nn</h3>
+                    <canvas id="chart-churn-gender"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>Oppsigelse&aring;rsaker</h3>
+                    <canvas id="chart-churn-reasons"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- TENURE -->
+        <section id="tab-tenure" class="tab-content">
+            <div class="cards" id="tenure-cards"></div>
+            <div class="grid-2">
+                <div class="chart-container">
+                    <h3>Ansettelsestid fordeling</h3>
+                    <canvas id="chart-tenure-dist"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>Heltid vs deltid</h3>
+                    <canvas id="chart-tenure-ft-pt"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- L&Oslash;NN -->
+        <section id="tab-lonn" class="tab-content">
+            <div class="cards" id="salary-cards"></div>
+            <div class="grid-2">
+                <div class="chart-container">
+                    <h3>L&oslash;nn per avdeling</h3>
+                    <canvas id="chart-salary-dept"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>L&oslash;nn per land</h3>
+                    <canvas id="chart-salary-country"></canvas>
+                </div>
+            </div>
+            <div class="grid-2">
+                <div class="chart-container">
+                    <h3>L&oslash;nn per kj&oslash;nn</h3>
+                    <canvas id="chart-salary-gender"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>L&oslash;nn per aldersgruppe</h3>
+                    <canvas id="chart-salary-age"></canvas>
+                </div>
+            </div>
+            <div class="chart-container">
+                <h3>L&oslash;nn per jobbfamilie</h3>
+                <canvas id="chart-salary-jobfam"></canvas>
+            </div>
+        </section>
+
+        <!-- JOBBFAMILIER -->
+        <section id="tab-jobbfamilier" class="tab-content">
+            <div class="chart-container">
+                <h3>Jobbfamilier fordeling</h3>
+                <canvas id="chart-jf-dist"></canvas>
+            </div>
+            <div class="grid-2">
+                <div class="chart-container">
+                    <h3>Jobbfamilier per land</h3>
+                    <canvas id="chart-jf-country"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>Kj&oslash;nnsbalanse per jobbfamilie</h3>
+                    <canvas id="chart-jf-gender"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- ANALYSE -->
+        <section id="tab-analyse" class="tab-content">
+            <div class="analyse-controls controls">
+                <div class="analyse-row">
+                    <label>
+                        Metrikk
+                        <select id="analyse-metric"></select>
+                    </label>
+                    <label>
+                        Gruppering
+                        <select id="analyse-group-by"></select>
+                    </label>
+                    <label>
+                        Inndeling (valgfri)
+                        <select id="analyse-split-by">
+                            <option value="">Ingen</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="analyse-row">
+                    <label>
+                        Filter
+                        <select id="analyse-filter-dim">
+                            <option value="">Ingen filter</option>
+                        </select>
+                    </label>
+                    <label>
+                        Filterverdi
+                        <select id="analyse-filter-val" disabled>
+                            <option value="">Velg filter f&oslash;rst</option>
+                        </select>
+                    </label>
+                    <button class="btn btn-primary" onclick="runAnalysis()">Vis analyse</button>
+                </div>
+            </div>
+
+            <div id="analyse-chart-types" class="chart-type-selector hidden">
+                <span class="chart-type-label">Graftype:</span>
+                <div class="chart-type-pills" id="analyse-pills"></div>
+            </div>
+
+            <div class="analyse-templates controls">
+                <label>
+                    Maler
+                    <select id="analyse-template-list">
+                        <option value="">Ingen lagrede maler</option>
+                    </select>
+                </label>
+                <button class="btn btn-secondary" onclick="loadTemplate()">Last inn</button>
+                <button class="btn btn-outline" onclick="saveTemplate()">Lagre mal</button>
+                <button class="btn btn-outline" onclick="deleteTemplate()" style="color:var(--red);border-color:var(--red)">Slett</button>
+            </div>
+
+            <div id="analyse-result" class="chart-container hidden">
+                <h3 id="analyse-chart-title">Resultat</h3>
+                <canvas id="chart-analyse"></canvas>
+            </div>
+        </section>
+
+        <!-- S&Oslash;K -->
+        <section id="tab-sok" class="tab-content">
+            <div class="controls">
+                <input type="text" id="search-name" placeholder="Navn...">
+                <input type="text" id="search-dept" placeholder="Avdeling...">
+                <input type="text" id="search-country" placeholder="Land...">
+                <input type="text" id="search-company" placeholder="Selskap...">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="search-active" checked> Kun aktive
+                </label>
+                <button class="btn btn-primary" onclick="doSearch()">S&oslash;k</button>
+            </div>
+            <div id="search-results"></div>
+        </section>
+
+        <!-- IMPORT -->
+        <section id="tab-import" class="tab-content">
+            <div class="import-area">
+                <div id="drop-zone" class="drop-zone">
+                    <p>Dra og slipp en Excel-fil her</p>
+                    <p class="small">eller</p>
+                    <label class="btn btn-secondary file-label">
+                        Velg fil
+                        <input type="file" id="file-input" accept=".xlsx,.xls" hidden>
+                    </label>
+                </div>
+                <div class="import-options">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="import-clear"> Slett eksisterende data f&oslash;r import
+                    </label>
+                </div>
+                <div id="import-status"></div>
+            </div>
+            <div class="import-history">
+                <h3>Import-historikk</h3>
+                <div id="import-history-list"></div>
+            </div>
+        </section>
+
+        <!-- LASTEINDIKATOR -->
+        <div id="loader" class="loader hidden">
+            <div class="spinner"></div>
+        </div>
+
+        <!-- TOM TILSTAND -->
+        <div id="empty-state" class="empty-state hidden">
+            <h2>Ingen data</h2>
+            <p>Importer en Excel-fil for &aring; komme i gang.</p>
+            <button class="btn btn-primary" onclick="switchTab('import')">G&aring; til import</button>
+        </div>
+    </main>
+
+    <footer>
+        ECIT HR Analyse &mdash; Intern bruk
+    </footer>
+
+    <script src="/static/js/chart.min.js"></script>
+    <script src="/static/js/charts.js?v=5"></script>
+    <script src="/static/js/app.js?v=5"></script>
+</body>
+</html>
