@@ -1,0 +1,22 @@
+# EPF Instance .gitignore
+
+# Only track the ecit-selskapsanalyse instance
+_instances/*
+!_instances/ecit-selskapsanalyse
+!_instances/ecit-selskapsanalyse/**
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Temporary files
+*.tmp
+*.bak
+*.log

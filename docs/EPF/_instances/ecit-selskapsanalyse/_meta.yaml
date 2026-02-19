@@ -1,0 +1,15 @@
+# EPF Instance Metadata
+# This file contains metadata about this EPF instance
+
+instance:
+  product_name: "ecit-selskapsanalyse"
+  epf_version: "2.12.0"
+  instance_version: "1.0.0"
+  created_date: "2026-02-14"
+  description: |
+    Add a brief description of this product instance.
+
+  current_cycle:
+    cycle_number: 1
+    cycle_id: "cycle-001"
+    phase: "READY"
