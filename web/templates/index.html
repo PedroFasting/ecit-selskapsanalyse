@@ -23,13 +23,10 @@
 
     <nav id="tab-nav">
         <button class="tab active" data-tab="oversikt">Oversikt</button>
-        <button class="tab" data-tab="alder">Alder</button>
-        <button class="tab" data-tab="geografi">Geografi</button>
-        <button class="tab" data-tab="kjonn">Kj&oslash;nn</button>
+        <button class="tab" data-tab="analyse">Analyse</button>
         <button class="tab" data-tab="churn">Churn</button>
         <button class="tab" data-tab="tenure">Tenure</button>
         <button class="tab" data-tab="lonn">L&oslash;nn</button>
-        <button class="tab" data-tab="jobbfamilier">Jobbfamilier</button>
         <button class="tab" data-tab="analyse">Analyse</button>
         <button class="tab" data-tab="sok">S&oslash;k</button>
         <button class="tab" data-tab="import">Import</button>
@@ -39,16 +36,6 @@
         <!-- OVERSIKT -->
         <section id="tab-oversikt" class="tab-content active">
             <div class="cards" id="overview-cards"></div>
-            <div class="grid-2">
-                <div class="chart-container">
-                    <h3>Ansatte per land</h3>
-                    <canvas id="chart-by-country"></canvas>
-                </div>
-                <div class="chart-container">
-                    <h3>Ansatte per selskap</h3>
-                    <canvas id="chart-by-company"></canvas>
-                </div>
-            </div>
             <div class="grid-2">
                 <div class="chart-container">
                     <h3>Ansettelsestyper</h3>
@@ -61,55 +48,9 @@
             </div>
         </section>
 
-        <!-- ALDER -->
-        <section id="tab-alder" class="tab-content">
-            <div class="grid-2">
-                <div class="chart-container">
-                    <h3>Aldersfordeling</h3>
-                    <canvas id="chart-age-dist"></canvas>
-                </div>
-                <div class="chart-container">
-                    <h3>Aldersfordeling (%)</h3>
-                    <canvas id="chart-age-pct"></canvas>
-                </div>
-            </div>
-            <div class="chart-container">
-                <h3>Alder per land</h3>
-                <canvas id="chart-age-country"></canvas>
-            </div>
-        </section>
+        <!-- GEOGRAFI (fjernet — dekkes av Analyse) -->
 
-        <!-- GEOGRAFI -->
-        <section id="tab-geografi" class="tab-content">
-            <div class="chart-container">
-                <h3>Ansatte per land</h3>
-                <canvas id="chart-geo-country"></canvas>
-            </div>
-            <div class="grid-2">
-                <div class="chart-container">
-                    <h3>Per selskap</h3>
-                    <canvas id="chart-geo-company"></canvas>
-                </div>
-                <div class="chart-container">
-                    <h3>Per avdeling</h3>
-                    <canvas id="chart-geo-department"></canvas>
-                </div>
-            </div>
-        </section>
-
-        <!-- KJ&Oslash;NN -->
-        <section id="tab-kjonn" class="tab-content">
-            <div class="grid-2">
-                <div class="chart-container">
-                    <h3>Kj&oslash;nnsfordeling</h3>
-                    <canvas id="chart-gender-dist"></canvas>
-                </div>
-                <div class="chart-container">
-                    <h3>Kj&oslash;nn per land</h3>
-                    <canvas id="chart-gender-country"></canvas>
-                </div>
-            </div>
-        </section>
+        <!-- KJØNN (fjernet — dekkes av Analyse) -->
 
         <!-- CHURN -->
         <section id="tab-churn" class="tab-content">
@@ -169,49 +110,13 @@
         <!-- L&Oslash;NN -->
         <section id="tab-lonn" class="tab-content">
             <div class="cards" id="salary-cards"></div>
-            <div class="grid-2">
-                <div class="chart-container">
-                    <h3>L&oslash;nn per avdeling</h3>
-                    <canvas id="chart-salary-dept"></canvas>
-                </div>
-                <div class="chart-container">
-                    <h3>L&oslash;nn per land</h3>
-                    <canvas id="chart-salary-country"></canvas>
-                </div>
-            </div>
-            <div class="grid-2">
-                <div class="chart-container">
-                    <h3>L&oslash;nn per kj&oslash;nn</h3>
-                    <canvas id="chart-salary-gender"></canvas>
-                </div>
-                <div class="chart-container">
-                    <h3>L&oslash;nn per aldersgruppe</h3>
-                    <canvas id="chart-salary-age"></canvas>
-                </div>
-            </div>
             <div class="chart-container">
-                <h3>L&oslash;nn per jobbfamilie</h3>
-                <canvas id="chart-salary-jobfam"></canvas>
+                <h3>L&oslash;nn per kj&oslash;nn (l&oslash;nnsforskjell)</h3>
+                <canvas id="chart-salary-gender"></canvas>
             </div>
         </section>
 
-        <!-- JOBBFAMILIER -->
-        <section id="tab-jobbfamilier" class="tab-content">
-            <div class="chart-container">
-                <h3>Jobbfamilier fordeling</h3>
-                <canvas id="chart-jf-dist"></canvas>
-            </div>
-            <div class="grid-2">
-                <div class="chart-container">
-                    <h3>Jobbfamilier per land</h3>
-                    <canvas id="chart-jf-country"></canvas>
-                </div>
-                <div class="chart-container">
-                    <h3>Kj&oslash;nnsbalanse per jobbfamilie</h3>
-                    <canvas id="chart-jf-gender"></canvas>
-                </div>
-            </div>
-        </section>
+        <!-- JOBBFAMILIER (fjernet — dekkes av Analyse) -->
 
         <!-- ANALYSE -->
         <section id="tab-analyse" class="tab-content">

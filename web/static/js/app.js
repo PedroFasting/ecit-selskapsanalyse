@@ -101,13 +101,9 @@ async function loadTabData(tabName) {
 
     switch (tabName) {
         case 'oversikt': return loadOversikt();
-        case 'alder': return loadAlder();
-        case 'geografi': return loadGeografi();
-        case 'kjonn': return loadKjonn();
         case 'churn': return loadChurn();
         case 'tenure': return loadTenure();
         case 'lonn': return loadLonn();
-        case 'jobbfamilier': return loadJobbfamilier();
         case 'analyse': return loadAnalyse();
         case 'sok': return; // Søk laster on-demand
         case 'import': return loadImportHistory();
@@ -117,10 +113,8 @@ async function loadTabData(tabName) {
 // === OVERSIKT ===
 
 async function loadOversikt() {
-    const [summary, byCountry, byCompany, empTypes, ftPt, mgmt] = await Promise.all([
+    const [summary, empTypes, ftPt, mgmt] = await Promise.all([
         fetchData('/api/overview/summary'),
-        fetchData('/api/overview/by-country'),
-        fetchData('/api/overview/by-company'),
         fetchData('/api/employment/types'),
         fetchData('/api/employment/fulltime-parttime'),
         fetchData('/api/management/ratio'),
@@ -138,12 +132,6 @@ async function loadOversikt() {
         `;
     }
 
-    if (byCountry) {
-        renderBarChart('chart-by-country', Object.keys(byCountry), Object.values(byCountry));
-    }
-    if (byCompany) {
-        renderHorizontalBarChart('chart-by-company', Object.keys(byCompany), Object.values(byCompany), { colors: COLORS.secondary });
-    }
     if (empTypes) {
         renderPieChart('chart-employment-types', Object.keys(empTypes), Object.values(empTypes));
     }
@@ -151,81 +139,6 @@ async function loadOversikt() {
         renderDoughnutChart('chart-fulltime-parttime', Object.keys(ftPt), Object.values(ftPt), {
             colors: [COLORS.primary, COLORS.accent, COLORS.unknown],
         });
-    }
-}
-
-// === ALDER ===
-
-async function loadAlder() {
-    const [dist, pct, byCountry] = await Promise.all([
-        fetchData('/api/age/distribution'),
-        fetchData('/api/age/distribution-pct'),
-        fetchData('/api/age/by-country'),
-    ]);
-
-    if (dist) {
-        const labels = Object.keys(dist).filter(k => k !== 'Ukjent');
-        const values = labels.map(k => dist[k]);
-        renderBarChart('chart-age-dist', labels, values, { colors: COLORS.secondary });
-    }
-    if (pct) {
-        const labels = Object.keys(pct).filter(k => k !== 'Ukjent');
-        const values = labels.map(k => pct[k]);
-        renderBarChart('chart-age-pct', labels, values, { colors: COLORS.accent });
-    }
-    if (byCountry) {
-        // Stacked bar: land på x-aksen, alderskategorier som datasets
-        const countries = Object.keys(byCountry);
-        const cats = ['Under 25', '25-34', '35-44', '45-54', '55-64', '65+'];
-        const datasets = cats.map((cat, i) => ({
-            label: cat,
-            data: countries.map(c => byCountry[c][cat] || 0),
-            backgroundColor: PALETTE[i % PALETTE.length],
-        }));
-        renderStackedBarChart('chart-age-country', countries, datasets);
-    }
-}
-
-// === GEOGRAFI ===
-
-async function loadGeografi() {
-    const [byCountry, byCompany, byDept] = await Promise.all([
-        fetchData('/api/overview/by-country'),
-        fetchData('/api/overview/by-company'),
-        fetchData('/api/overview/by-department'),
-    ]);
-
-    if (byCountry) {
-        renderBarChart('chart-geo-country', Object.keys(byCountry), Object.values(byCountry));
-    }
-    if (byCompany) {
-        renderHorizontalBarChart('chart-geo-company', Object.keys(byCompany), Object.values(byCompany), { colors: COLORS.secondary });
-    }
-    if (byDept) {
-        renderHorizontalBarChart('chart-geo-department', Object.keys(byDept), Object.values(byDept), { colors: COLORS.accent });
-    }
-}
-
-// === KJØNN ===
-
-async function loadKjonn() {
-    const [dist, byCountry] = await Promise.all([
-        fetchData('/api/gender/distribution'),
-        fetchData('/api/gender/by-country'),
-    ]);
-
-    if (dist) {
-        const labels = Object.keys(dist);
-        const colors = labels.map(l => l === 'Mann' ? COLORS.male : l === 'Kvinne' ? COLORS.female : COLORS.unknown);
-        renderPieChart('chart-gender-dist', labels, Object.values(dist), { colors });
-    }
-    if (byCountry) {
-        const countries = Object.keys(byCountry);
-        const datasets = [
-            { label: 'Menn', data: countries.map(c => byCountry[c]['Mann'] || 0), backgroundColor: COLORS.male },
-            { label: 'Kvinner', data: countries.map(c => byCountry[c]['Kvinne'] || 0), backgroundColor: COLORS.female },
-        ];
-        renderStackedBarChart('chart-gender-country', countries, datasets);
     }
 }
 
@@ -335,13 +248,9 @@ async function loadTenure() {
 // === LØNN ===
 
 async function loadLonn() {
-    const [summary, byDept, byCountry, byGender, byAge, byJobFam] = await Promise.all([
+    const [summary, byGender] = await Promise.all([
         fetchData('/api/salary/summary'),
-        fetchData('/api/salary/by-department'),
-        fetchData('/api/salary/by-country'),
         fetchData('/api/salary/by-gender'),
-        fetchData('/api/salary/by-age'),
-        fetchData('/api/salary/by-job-family'),
     ]);
 
     if (summary && summary.antall_med_lonn > 0) {
@@ -354,20 +263,6 @@ async function loadLonn() {
         `;
     }
 
-    if (hasData(byDept)) {
-        const labels = Object.keys(byDept);
-        const avgs = labels.map(k => byDept[k].gjennomsnitt);
-        renderHorizontalBarChart('chart-salary-dept', labels, avgs, { colors: COLORS.primary });
-    } else {
-        showNoData('chart-salary-dept');
-    }
-    if (hasData(byCountry)) {
-        const labels = Object.keys(byCountry);
-        const avgs = labels.map(k => byCountry[k].gjennomsnitt);
-        renderBarChart('chart-salary-country', labels, avgs, { colors: COLORS.accent });
-    } else {
-        showNoData('chart-salary-country');
-    }
     if (byGender && Object.keys(byGender).filter(k => !k.startsWith('lønn')).length > 0) {
         const labels = Object.keys(byGender).filter(k => !k.startsWith('lønn'));
         const avgs = labels.map(k => byGender[k].gjennomsnitt);
@@ -375,54 +270,6 @@ async function loadLonn() {
         renderBarChart('chart-salary-gender', labels, avgs, { colors });
     } else {
         showNoData('chart-salary-gender');
-    }
-    if (hasData(byAge)) {
-        const labels = Object.keys(byAge);
-        const avgs = labels.map(k => byAge[k].gjennomsnitt);
-        renderBarChart('chart-salary-age', labels, avgs, { colors: COLORS.secondary });
-    } else {
-        showNoData('chart-salary-age');
-    }
-    if (hasData(byJobFam)) {
-        const labels = Object.keys(byJobFam);
-        const avgs = labels.map(k => byJobFam[k].gjennomsnitt);
-        renderHorizontalBarChart('chart-salary-jobfam', labels, avgs);
-    } else {
-        showNoData('chart-salary-jobfam');
-    }
-}
-
-// === JOBBFAMILIER ===
-
-async function loadJobbfamilier() {
-    const [dist, byCountry, byGender] = await Promise.all([
-        fetchData('/api/job-family/distribution'),
-        fetchData('/api/job-family/by-country'),
-        fetchData('/api/job-family/by-gender'),
-    ]);
-
-    if (dist) {
-        renderHorizontalBarChart('chart-jf-dist', Object.keys(dist), Object.values(dist));
-    }
-    if (byCountry) {
-        const countries = Object.keys(byCountry);
-        const allFamilies = new Set();
-        countries.forEach(c => Object.keys(byCountry[c]).forEach(f => allFamilies.add(f)));
-        const families = [...allFamilies];
-        const datasets = families.map((fam, i) => ({
-            label: fam,
-            data: countries.map(c => byCountry[c][fam] || 0),
-            backgroundColor: PALETTE[i % PALETTE.length],
-        }));
-        renderStackedBarChart('chart-jf-country', countries, datasets);
-    }
-    if (byGender) {
-        const families = Object.keys(byGender);
-        const datasets = [
-            { label: 'Menn', data: families.map(f => byGender[f]['Mann'] || 0), backgroundColor: COLORS.male },
-            { label: 'Kvinner', data: families.map(f => byGender[f]['Kvinne'] || 0), backgroundColor: COLORS.female },
-        ];
-        renderStackedBarChart('chart-jf-gender', families, datasets);
     }
 }
 

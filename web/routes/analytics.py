@@ -1,6 +1,8 @@
 """
-API-ruter for alle HR-analyser.
-Direkte 1:1-mapping mellom HRAnalytics-metoder og GET-endepunkter.
+API-ruter for HR-analyser.
+
+Kun endepunkter med unik logikk som den egendefinerte analyse-fanen
+(custom analyzer) ikke kan gjenskape, pluss nøkkeltall/oppsummeringer.
 """
 
 from datetime import date
@@ -19,58 +21,6 @@ router = APIRouter()
 async def overview_summary():
     """Generell oversikt over ansatte."""
     return get_analytics().employees_summary()
-
-
-@router.get("/overview/by-country")
-async def overview_by_country(active_only: bool = Query(True)):
-    """Antall ansatte per land."""
-    return get_analytics().employees_by_country(active_only=active_only)
-
-
-@router.get("/overview/by-company")
-async def overview_by_company(active_only: bool = Query(True)):
-    """Antall ansatte per juridisk selskap."""
-    return get_analytics().employees_by_company(active_only=active_only)
-
-
-@router.get("/overview/by-department")
-async def overview_by_department(active_only: bool = Query(True)):
-    """Antall ansatte per avdeling."""
-    return get_analytics().employees_by_department(active_only=active_only)
-
-
-# === ALDER ===
-
-@router.get("/age/distribution")
-async def age_distribution(active_only: bool = Query(True)):
-    """Aldersfordeling i kategorier."""
-    return get_analytics().age_distribution(active_only=active_only)
-
-
-@router.get("/age/distribution-pct")
-async def age_distribution_pct(active_only: bool = Query(True)):
-    """Aldersfordeling i prosent."""
-    return get_analytics().age_distribution_pct(active_only=active_only)
-
-
-@router.get("/age/by-country")
-async def age_by_country(active_only: bool = Query(True)):
-    """Aldersfordeling per land."""
-    return get_analytics().age_distribution_by_country(active_only=active_only)
-
-
-# === KJØNN ===
-
-@router.get("/gender/distribution")
-async def gender_distribution(active_only: bool = Query(True)):
-    """Kjønnsfordeling."""
-    return get_analytics().gender_distribution(active_only=active_only)
-
-
-@router.get("/gender/by-country")
-async def gender_by_country(active_only: bool = Query(True)):
-    """Kjønnsfordeling per land."""
-    return get_analytics().gender_by_country(active_only=active_only)
 
 
 # === CHURN ===
@@ -182,23 +132,6 @@ async def search_employees(
     )
 
 
-# === KOMBINERT ===
-
-@router.get("/combined/summary")
-async def combined_summary(
-    country: Optional[str] = Query(None),
-    active_only: bool = Query(True),
-):
-    """Kombinert sammendrag med alle nøkkeltall."""
-    return get_analytics().combined_summary(country=country, active_only=active_only)
-
-
-@router.get("/combined/age-gender-country")
-async def age_gender_country(active_only: bool = Query(True)):
-    """Kombinert oversikt: alder og kjønn per land."""
-    return get_analytics().age_and_gender_by_country(active_only=active_only)
-
-
 # === PLANLAGTE AVGANGER ===
 
 @router.get("/departures/planned")
@@ -215,51 +148,7 @@ async def salary_summary(active_only: bool = Query(True)):
     return get_analytics().salary_summary(active_only=active_only)
 
 
-@router.get("/salary/by-department")
-async def salary_by_department(active_only: bool = Query(True)):
-    """Gjennomsnittlig lønn per avdeling."""
-    return get_analytics().salary_by_department(active_only=active_only)
-
-
-@router.get("/salary/by-country")
-async def salary_by_country(active_only: bool = Query(True)):
-    """Gjennomsnittlig lønn per land."""
-    return get_analytics().salary_by_country(active_only=active_only)
-
-
 @router.get("/salary/by-gender")
 async def salary_by_gender(active_only: bool = Query(True)):
     """Lønn per kjønn med lønnsgap-beregning."""
     return get_analytics().salary_by_gender(active_only=active_only)
-
-
-@router.get("/salary/by-age")
-async def salary_by_age(active_only: bool = Query(True)):
-    """Gjennomsnittlig lønn per alderskategori."""
-    return get_analytics().salary_by_age(active_only=active_only)
-
-
-@router.get("/salary/by-job-family")
-async def salary_by_job_family(active_only: bool = Query(True)):
-    """Gjennomsnittlig lønn per jobbfamilie."""
-    return get_analytics().salary_by_job_family(active_only=active_only)
-
-
-# === JOBBFAMILIER ===
-
-@router.get("/job-family/distribution")
-async def job_family_distribution(active_only: bool = Query(True)):
-    """Fordeling av ansatte per jobbfamilie."""
-    return get_analytics().job_family_distribution(active_only=active_only)
-
-
-@router.get("/job-family/by-country")
-async def job_family_by_country(active_only: bool = Query(True)):
-    """Jobbfamilier per land."""
-    return get_analytics().job_family_by_country(active_only=active_only)
-
-
-@router.get("/job-family/by-gender")
-async def job_family_by_gender(active_only: bool = Query(True)):
-    """Kjønnsfordeling per jobbfamilie."""
-    return get_analytics().job_family_by_gender(active_only=active_only)

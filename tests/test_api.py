@@ -83,62 +83,6 @@ class TestOverview:
         assert "gjennomsnitt_alder" in data
         assert data["totalt"] == 10  # 10 testansatte
 
-    def test_by_country(self, client):
-        data = assert_json_ok(client.get("/api/overview/by-country"))
-        assert isinstance(data, dict)
-        assert len(data) > 0
-
-    def test_by_country_all(self, client):
-        """Inkluder sluttede ansatte."""
-        data = assert_json_ok(client.get("/api/overview/by-country?active_only=false"))
-        assert isinstance(data, dict)
-
-    def test_by_company(self, client):
-        data = assert_json_ok(client.get("/api/overview/by-company"))
-        assert isinstance(data, dict)
-
-    def test_by_department(self, client):
-        data = assert_json_ok(client.get("/api/overview/by-department"))
-        assert isinstance(data, dict)
-
-
-# ===========================================================================
-# ALDER
-# ===========================================================================
-
-class TestAge:
-    """Tester for /api/age/* endepunkter."""
-
-    def test_distribution(self, client):
-        data = assert_json_ok(client.get("/api/age/distribution"))
-        assert isinstance(data, dict)
-
-    def test_distribution_pct(self, client):
-        data = assert_json_ok(client.get("/api/age/distribution-pct"))
-        assert isinstance(data, dict)
-
-    def test_by_country(self, client):
-        data = assert_json_ok(client.get("/api/age/by-country"))
-        assert isinstance(data, dict)
-
-
-# ===========================================================================
-# KJØNN
-# ===========================================================================
-
-class TestGender:
-    """Tester for /api/gender/* endepunkter."""
-
-    def test_distribution(self, client):
-        data = assert_json_ok(client.get("/api/gender/distribution"))
-        assert isinstance(data, dict)
-        # Forventer Mann og Kvinne som nøkler eller verdier
-        assert "Mann" in str(data) and "Kvinne" in str(data)
-
-    def test_by_country(self, client):
-        data = assert_json_ok(client.get("/api/gender/by-country"))
-        assert isinstance(data, dict)
-
 
 # ===========================================================================
 # CHURN
@@ -280,26 +224,6 @@ class TestSearch:
 
 
 # ===========================================================================
-# KOMBINERT
-# ===========================================================================
-
-class TestCombined:
-    """Tester for /api/combined/* endepunkter."""
-
-    def test_summary(self, client):
-        data = assert_json_ok(client.get("/api/combined/summary"))
-        assert isinstance(data, dict)
-
-    def test_summary_by_country(self, client):
-        data = assert_json_ok(client.get("/api/combined/summary?country=Norge"))
-        assert isinstance(data, dict)
-
-    def test_age_gender_country(self, client):
-        data = assert_json_ok(client.get("/api/combined/age-gender-country"))
-        assert isinstance(data, dict)
-
-
-# ===========================================================================
 # PLANLAGTE AVGANGER
 # ===========================================================================
 
@@ -326,44 +250,8 @@ class TestSalary:
         data = assert_json_ok(client.get("/api/salary/summary"))
         assert isinstance(data, dict)
 
-    def test_by_department(self, client):
-        data = assert_json_ok(client.get("/api/salary/by-department"))
-        assert isinstance(data, dict)
-
-    def test_by_country(self, client):
-        data = assert_json_ok(client.get("/api/salary/by-country"))
-        assert isinstance(data, dict)
-
     def test_by_gender(self, client):
         data = assert_json_ok(client.get("/api/salary/by-gender"))
-        assert isinstance(data, dict)
-
-    def test_by_age(self, client):
-        data = assert_json_ok(client.get("/api/salary/by-age"))
-        assert isinstance(data, dict)
-
-    def test_by_job_family(self, client):
-        data = assert_json_ok(client.get("/api/salary/by-job-family"))
-        assert isinstance(data, dict)
-
-
-# ===========================================================================
-# JOBBFAMILIER
-# ===========================================================================
-
-class TestJobFamily:
-    """Tester for /api/job-family/* endepunkter."""
-
-    def test_distribution(self, client):
-        data = assert_json_ok(client.get("/api/job-family/distribution"))
-        assert isinstance(data, dict)
-
-    def test_by_country(self, client):
-        data = assert_json_ok(client.get("/api/job-family/by-country"))
-        assert isinstance(data, dict)
-
-    def test_by_gender(self, client):
-        data = assert_json_ok(client.get("/api/job-family/by-gender"))
         assert isinstance(data, dict)
 
 
@@ -635,11 +523,6 @@ class TestActiveOnlyParam:
     """Verifiser at active_only-parameteren fungerer på tvers av endepunkter."""
 
     @pytest.mark.parametrize("endpoint", [
-        "/api/overview/by-country",
-        "/api/overview/by-company",
-        "/api/overview/by-department",
-        "/api/age/distribution",
-        "/api/gender/distribution",
         pytest.param("/api/tenure/average", marks=pytest.mark.xfail(
             reason="Kjent WHERE-bug i average_tenure(active_only=False)")),
         pytest.param("/api/tenure/distribution", marks=pytest.mark.xfail(
@@ -648,14 +531,7 @@ class TestActiveOnlyParam:
         "/api/employment/fulltime-parttime",
         "/api/management/ratio",
         "/api/salary/summary",
-        "/api/salary/by-department",
-        "/api/salary/by-country",
         "/api/salary/by-gender",
-        "/api/salary/by-age",
-        "/api/salary/by-job-family",
-        "/api/job-family/distribution",
-        "/api/job-family/by-country",
-        "/api/job-family/by-gender",
     ])
     def test_active_only_false(self, client, endpoint):
         """Alle endepunkter med active_only aksepterer false."""
