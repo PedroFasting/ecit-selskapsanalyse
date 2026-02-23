@@ -23,69 +23,80 @@ TEST_EMPLOYEES = [
     #  arbeidsland, land, juridisk_selskap, avdeling, jobbfamilie,
     #  ansettelsetype, ansettelsens_startdato, slutdato_ansettelse,
     #  oppsigelsesarsak, arbeidstid_per_uke, heltid_per_uke,
-    #  er_leder, lonn, medarbeidernummer, tittel)
+    #  er_leder, lonn, medarbeidernummer, tittel,
+    #  ansettelsesniva, arbeidssted)
     ("Ola", "Nordmann", "Mann", 30, "1996-01-15", "Norsk",
      "Norge", "Norge", "ECIT AS", "Regnskap", "Finance",
      "Fast", "2020-01-01", None,
      None, 37.5, 37.5,
-     "Nei", 550000, "M001", "Regnskapsfører"),
+     "Nei", 550000, "M001", "Regnskapsfører",
+     "Medarbeider", "Oslo"),
 
     ("Kari", "Hansen", "Kvinne", 42, "1984-03-20", "Norsk",
      "Norge", "Norge", "ECIT AS", "Regnskap", "Finance",
      "Fast", "2018-06-01", None,
      None, 37.5, 37.5,
-     "Ja", 720000, "M002", "Regnskapsleder"),
+     "Ja", 720000, "M002", "Regnskapsleder",
+     "Leder", "Oslo"),
 
     ("Erik", "Berg", "Mann", 55, "1971-07-10", "Norsk",
      "Norge", "Norway", "ECIT Consulting", "IT", "Technology",
      "Fast", "2015-03-15", None,
      None, 37.5, 37.5,
-     "Nei", 680000, "M003", "Seniorkonsulent"),
+     "Nei", 680000, "M003", "Seniorkonsulent",
+     "Senior", "Bergen"),
 
     ("Anna", "Jensen", "Kvinne", 28, "1998-05-22", "Dansk",
      "Danmark", "DK", "ECIT DK", "Regnskap", "Finance",
      "Fast", "2022-01-10", None,
      None, 37.0, 37.0,
-     "Nei", 420000, "M004", "Regnskapsfører"),
+     "Nei", 420000, "M004", "Regnskapsfører",
+     "Medarbeider", "København"),
 
     ("Lars", "Petersen", "Mann", 35, "1991-11-03", "Dansk",
      "Danmark", "Danmark", "ECIT DK", "Salg", "Commercial",
      "Fast", "2019-08-01", None,
      None, 37.0, 37.0,
-     "Ja", 580000, "M005", "Salgssjef"),
+     "Ja", 580000, "M005", "Salgssjef",
+     "Leder", "København"),
 
     ("Sofia", "Lindqvist", "Kvinne", 38, "1988-09-14", "Svensk",
      "Sverige", "Sverige", "ECIT SE", "Regnskap", "Finance",
      "Fast", "2021-02-01", None,
      None, 40.0, 40.0,
-     "Nei", 490000, "M006", "Regnskapsfører"),
+     "Nei", 490000, "M006", "Regnskapsfører",
+     "Medarbeider", "Stockholm"),
 
     ("Morten", "Bakke", "Mann", 24, "2002-04-28", "Norsk",
      "Norge", "Norge", "ECIT AS", "IT", "Technology",
      "Vikar", "2024-06-01", None,
      None, 20.0, 37.5,
-     "Nei", 300000, "M007", "Juniorutvikler"),
+     "Nei", 300000, "M007", "Juniorutvikler",
+     "Junior", "Oslo"),
 
     # Sluttet ansatt (terminert i 2025)
     ("Per", "Olsen", "Mann", 48, "1978-02-11", "Norsk",
      "Norge", "Norge", "ECIT AS", "Regnskap", "Finance",
      "Fast", "2017-01-15", "2025-06-30",
      "Frivillig", 37.5, 37.5,
-     "Nei", 600000, "M008", "Controller"),
+     "Nei", 600000, "M008", "Controller",
+     "Senior", "Oslo"),
 
     # Sluttet ansatt (terminert i 2024)
     ("Lise", "Dahl", "Kvinne", 33, "1993-08-19", "Dansk",
      "Danmark", "DK", "ECIT DK", "Regnskap", "Finance",
      "Fast", "2020-03-01", "2024-12-31",
      "Ufrivillig", 37.0, 37.0,
-     "Nei", 440000, "M009", "Regnskapsfører"),
+     "Nei", 440000, "M009", "Regnskapsfører",
+     "Medarbeider", "København"),
 
     # Planlagt avgang (slutdato i fremtiden)
     ("Vidar", "Holm", "Mann", 62, "1964-06-05", "Norsk",
      "Norge", "Norge", "ECIT Consulting", "IT", "Technology",
      "Fast", "2010-01-01", "2027-06-30",
      None, 37.5, 37.5,
-     "Nei", 750000, "M010", "Sjefsarkitekt"),
+     "Nei", 750000, "M010", "Sjefsarkitekt",
+     "Senior", "Bergen"),
 ]
 
 EMPLOYEE_COLUMNS = [
@@ -94,6 +105,7 @@ EMPLOYEE_COLUMNS = [
     "ansettelsetype", "ansettelsens_startdato", "slutdato_ansettelse",
     "oppsigelsesarsak", "arbeidstid_per_uke", "heltid_per_uke",
     "er_leder", "lonn", "medarbeidernummer", "tittel",
+    "ansettelsesniva", "arbeidssted",
 ]
 
 

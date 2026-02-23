@@ -4,6 +4,7 @@
 
 // === STATE ===
 const tabLoaded = {};  // Holder styr på hvilke tabs som har lastet data
+let currentUser = null; // Innlogget bruker {id, navn, epost, rolle} eller null
 
 // === API HELPERS ===
 
@@ -33,6 +34,15 @@ async function fetchData(url) {
     showLoader();
     try {
         const res = await fetch(url);
+        if (res.status === 401) {
+            // Sesjon utløpt — nullstill bruker
+            if (currentUser) {
+                currentUser = null;
+                updateUserUI();
+                showToast('Sesjonen har utløpt — logg inn på nytt', true);
+            }
+            return null;
+        }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return await res.json();
     } catch (err) {
@@ -45,6 +55,164 @@ async function fetchData(url) {
 
 function showLoader() { document.getElementById('loader').classList.remove('hidden'); }
 function hideLoader() { document.getElementById('loader').classList.add('hidden'); }
+
+// === AUTH ===
+
+/** Vis en kort toast-melding nede i skjermbildet. */
+function showToast(msg, isError = false) {
+    let toast = document.getElementById('app-toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'app-toast';
+        toast.className = 'toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = msg;
+    toast.classList.toggle('error', isError);
+    toast.classList.add('visible');
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => toast.classList.remove('visible'), 2500);
+}
+
+/** Oppdater header-UI basert på innloggingsstatus. */
+function updateUserUI() {
+    const btnLogin = document.getElementById('btn-login');
+    const userInfo = document.getElementById('user-info');
+    const userName = document.getElementById('user-name');
+    const userRole = document.getElementById('user-role');
+    const pinBtn = document.getElementById('btn-pin-analyse');
+    const adminTab = document.querySelector('.tab-admin');
+
+    if (currentUser) {
+        btnLogin.classList.add('hidden');
+        userInfo.classList.remove('hidden');
+        userName.textContent = currentUser.navn;
+        userRole.textContent = currentUser.rolle;
+        userRole.className = 'user-role-badge' + (currentUser.rolle === 'admin' ? ' admin' : '');
+        if (pinBtn) pinBtn.style.display = '';
+        // Vis admin-tab kun for admin
+        if (adminTab) {
+            if (currentUser.rolle === 'admin') {
+                adminTab.classList.remove('hidden');
+            } else {
+                adminTab.classList.add('hidden');
+            }
+        }
+    } else {
+        btnLogin.classList.remove('hidden');
+        userInfo.classList.add('hidden');
+        if (pinBtn) pinBtn.style.display = 'none';
+        if (adminTab) adminTab.classList.add('hidden');
+    }
+}
+
+/** Sjekk om brukeren allerede er innlogget (cookie). */
+async function checkAuth() {
+    try {
+        const res = await fetch('/api/auth/me');
+        if (res.ok) {
+            currentUser = await res.json();
+        } else {
+            currentUser = null;
+        }
+    } catch {
+        currentUser = null;
+    }
+    updateUserUI();
+}
+
+/** Vis login-modalen og last brukerliste. */
+async function showLoginModal() {
+    const modal = document.getElementById('login-modal');
+    const select = document.getElementById('login-user-select');
+    modal.classList.remove('hidden');
+
+    // Hent brukerliste
+    try {
+        const res = await fetch('/api/users');
+        const users = await res.json();
+        select.innerHTML = users.map(u =>
+            `<option value="${u.id}">${u.navn} (${u.rolle})</option>`
+        ).join('');
+    } catch {
+        select.innerHTML = '<option disabled>Kunne ikke laste brukere</option>';
+    }
+}
+
+function hideLoginModal() {
+    document.getElementById('login-modal').classList.add('hidden');
+}
+
+/** Utfør innlogging med valgt bruker. */
+async function doLogin() {
+    const select = document.getElementById('login-user-select');
+    const userId = select.value;
+    if (!userId) return;
+
+    try {
+        const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: parseInt(userId) }),
+        });
+        if (!res.ok) throw new Error('Innlogging feilet');
+        currentUser = await res.json();
+        updateUserUI();
+        hideLoginModal();
+        showToast(`Logget inn som ${currentUser.navn}`);
+
+        // Migrer localStorage-pins om de finnes
+        await migrateLocalPins();
+
+        // Oppdater dashboard hvis vi er på oversikt
+        if (tabLoaded['oversikt']) {
+            tabLoaded['oversikt'] = false;
+            loadOversikt();
+        }
+    } catch (err) {
+        showToast('Innlogging feilet: ' + err.message, true);
+    }
+}
+
+/** Logg ut. */
+async function doLogout() {
+    try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+    } catch { /* ignorer */ }
+    currentUser = null;
+    updateUserUI();
+    showToast('Logget ut');
+
+    // Oppdater dashboard
+    if (tabLoaded['oversikt']) {
+        tabLoaded['oversikt'] = false;
+        loadOversikt();
+    }
+}
+
+/** Migrer localStorage-pins til serveren ved første innlogging. */
+async function migrateLocalPins() {
+    const PINNED_KEY = 'dashboard_pinned_charts';
+    try {
+        const raw = localStorage.getItem(PINNED_KEY);
+        if (!raw) return;
+        const pins = JSON.parse(raw);
+        if (!Array.isArray(pins) || pins.length === 0) return;
+
+        const res = await fetch('/api/dashboard/pins/migrate-local', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pins }),
+        });
+        if (res.ok) {
+            const result = await res.json();
+            localStorage.removeItem(PINNED_KEY);
+            if (result.migrated > 0) {
+                showToast(`${result.migrated} lokale grafer migrert til serveren`);
+            }
+        }
+    } catch { /* ignorer migrasjonsfeil */ }
+}
 
 // === TAB NAVIGATION ===
 
@@ -74,6 +242,9 @@ document.querySelectorAll('.tab').forEach(btn => {
 // === INITIAL LOAD ===
 
 async function init() {
+    // Sjekk om brukeren allerede er innlogget
+    await checkAuth();
+
     // Sjekk database-status
     const status = await fetchData('/api/status');
     const badge = document.getElementById('status-badge');
@@ -107,6 +278,7 @@ async function loadTabData(tabName) {
         case 'analyse': return loadAnalyse();
         case 'sok': return; // Søk laster on-demand
         case 'import': return loadImportHistory();
+        case 'admin': return loadAdmin();
     }
 }
 
@@ -140,6 +312,175 @@ async function loadOversikt() {
             colors: [COLORS.primary, COLORS.accent, COLORS.unknown],
         });
     }
+
+    // Populer profil-dropdown fra API (eller fallback til statisk)
+    const presetSel = document.getElementById('dashboard-preset');
+    await populateProfileDropdown(presetSel);
+
+    // Rendre festede grafer for valgt profil
+    await renderDashboardCharts(presetSel.value);
+
+    // Lytter for profil-endring (kun én gang)
+    if (!presetSel.dataset.listenerAttached) {
+        presetSel.dataset.listenerAttached = 'true';
+        presetSel.addEventListener('change', async () => {
+            await renderDashboardCharts(presetSel.value);
+        });
+    }
+}
+
+/**
+ * Populer profil-dropdown fra API. Viser profiler tilgjengelig for innlogget bruker.
+ * Fallback: viser kun "Ikke innlogget" hvis brukeren ikke er logget inn.
+ */
+async function populateProfileDropdown(selectEl) {
+    if (!currentUser) {
+        selectEl.innerHTML = '<option value="" disabled>Logg inn for å se dashboard</option>';
+        return;
+    }
+
+    try {
+        const profiles = await fetchData('/api/dashboard/profiles');
+        if (!profiles) throw new Error('no data');
+
+        selectEl.innerHTML = profiles.map(p => {
+            const val = p.id === null ? '' : p.id;
+            return `<option value="${val}">${p.navn}</option>`;
+        }).join('');
+    } catch {
+        selectEl.innerHTML = '<option value="">Mine grafer</option>';
+    }
+}
+
+/**
+ * Rendre grafer basert på valgt profil via API.
+ * profileIdStr: '' for 'Mine grafer', eller en numeric profile ID.
+ */
+async function renderDashboardCharts(profileIdStr) {
+    if (!currentUser) {
+        const container = document.getElementById('pinned-charts-container');
+        if (container) container.innerHTML = '<p style="text-align:center;color:var(--text-light);padding:24px;">Logg inn for å se festede grafer.</p>';
+        return;
+    }
+
+    const url = profileIdStr
+        ? `/api/dashboard/pins?profile_id=${profileIdStr}`
+        : '/api/dashboard/pins';
+
+    try {
+        const pins = await fetchData(url);
+        if (!pins) {
+            await renderPinnedCharts([], false);
+            return;
+        }
+
+        // Map API field names (tittel → title) for renderPinnedCharts compatibility
+        const mapped = pins.map(p => ({
+            id: p.id,
+            metric: p.metric,
+            group_by: p.group_by,
+            split_by: p.split_by || null,
+            filter_dim: p.filter_dim || null,
+            filter_val: p.filter_val || null,
+            chart_type: p.chart_type || null,
+            title: p.tittel,
+        }));
+
+        // "Mine grafer" (profileIdStr='') → showUnpin=true; named profiles → only admin can unpin
+        const canUnpin = !profileIdStr || (currentUser && currentUser.rolle === 'admin');
+        await renderPinnedCharts(mapped, canUnpin);
+    } catch (err) {
+        console.error('Feil ved lasting av dashboard-pins:', err);
+        await renderPinnedCharts([], false);
+    }
+}
+
+/**
+ * Rendre festede grafer i oversikt-dashboardet.
+ * Henter data fra /api/analyze for hver pin og rendrer i #pinned-charts-container.
+ */
+async function renderPinnedCharts(pins, showUnpin = true) {
+    const container = document.getElementById('pinned-charts-container');
+    if (!container) return;
+
+    // Ødelegg eksisterende pinned chart-instanser
+    container.querySelectorAll('canvas').forEach(c => destroyChart(c.id));
+    // Tøm eksisterende festede grafer og grid-wrapper
+    container.innerHTML = '';
+
+    if (!pins || pins.length === 0) return;
+
+    // Opprett grid-wrapper
+    const grid = document.createElement('div');
+    grid.className = 'grid-2 pinned-charts-grid';
+
+    for (const pin of pins) {
+        // Bygg query-params
+        const params = new URLSearchParams({ metric: pin.metric, group_by: pin.group_by });
+        if (pin.split_by) params.set('split_by', pin.split_by);
+        if (pin.filter_dim && pin.filter_val) params.set(`filter_${pin.filter_dim}`, pin.filter_val);
+
+        const canvasId = 'pinned-' + pin.id;
+
+        // Opprett chart-container
+        const chartDiv = document.createElement('div');
+        chartDiv.className = 'chart-container pinned-chart';
+        chartDiv.dataset.pinId = pin.id;
+        const unpinBtn = showUnpin
+            ? `<button class="btn-chart-action btn-unpin" title="Fjern fra oversikt" onclick="unpinChart('${pin.id}')">&#x2715;</button>`
+            : '';
+        chartDiv.innerHTML = `
+            <div class="chart-header">
+                <h3>${pin.title}</h3>
+                <div class="chart-actions">
+                    ${unpinBtn}
+                </div>
+            </div>
+            <canvas id="${canvasId}"></canvas>
+        `;
+        grid.appendChild(chartDiv);
+    }
+
+    container.appendChild(grid);
+
+    // Hent data og rendre grafer parallelt
+    const renderPromises = pins.map(async (pin) => {
+        const params = new URLSearchParams({ metric: pin.metric, group_by: pin.group_by });
+        if (pin.split_by) params.set('split_by', pin.split_by);
+        if (pin.filter_dim && pin.filter_val) params.set(`filter_${pin.filter_dim}`, pin.filter_val);
+
+        const canvasId = 'pinned-' + pin.id;
+
+        try {
+            const result = await fetchData(`/api/analyze?${params.toString()}`);
+            if (!result || !result.data) {
+                showNoData(canvasId, 'Kunne ikke laste data');
+                return;
+            }
+
+            // "Alle"-gruppering: vis KPI-kort i stedet for graf
+            if (pin.group_by === 'alle') {
+                const value = Object.values(result.data)[0];
+                const chartDiv = document.querySelector(`[data-pin-id="${pin.id}"]`);
+                const canvas = chartDiv.querySelector('canvas');
+                if (canvas) canvas.style.display = 'none';
+                const kpiDiv = document.createElement('div');
+                kpiDiv.className = 'cards';
+                kpiDiv.innerHTML = card(result.meta.metric_label, formatNumber(value));
+                chartDiv.appendChild(kpiDiv);
+                return;
+            }
+
+            const hasSplitBy = !!pin.split_by;
+            const chartType = pin.chart_type || suggestChartType(result.data, hasSplitBy).default;
+            renderChartByType(canvasId, chartType, result.data, hasSplitBy);
+        } catch (err) {
+            console.error(`Feil ved rendering av festet graf ${pin.id}:`, err);
+            showNoData(canvasId, 'Feil ved lasting');
+        }
+    });
+
+    await Promise.all(renderPromises);
 }
 
 // === CHURN ===
@@ -257,6 +598,7 @@ async function loadLonn() {
         const cards = document.getElementById('salary-cards');
         cards.innerHTML = `
             ${card('Snitt lønn', formatNumber(summary.gjennomsnitt))}
+            ${card('Median lønn', formatNumber(summary.median))}
             ${card('Lavest', formatNumber(summary.min))}
             ${card('Høyest', formatNumber(summary.maks))}
             ${card('Total lønnsmasse', formatNumber(summary.total_lonnsmasse))}
@@ -343,6 +685,18 @@ async function loadAnalyseOptions() {
     // Reset mal-dropdown også ved endring av filterverdi
     const filterValSel2 = document.getElementById('analyse-filter-val');
     filterValSel2.addEventListener('change', resetTemplateSelection);
+
+    // "Alle"-gruppering: skjul split_by og chart-type pills
+    const groupSel2 = document.getElementById('analyse-group-by');
+    groupSel2.addEventListener('change', () => {
+        const isAlle = groupSel2.value === 'alle';
+        const splitLabel = document.getElementById('analyse-split-by').closest('label');
+        if (splitLabel) splitLabel.style.display = isAlle ? 'none' : '';
+        if (isAlle) {
+            document.getElementById('analyse-split-by').value = '';
+            document.getElementById('analyse-chart-types').classList.add('hidden');
+        }
+    });
 }
 
 async function runAnalysis() {
@@ -356,31 +710,64 @@ async function runAnalysis() {
 
     // Bygg query-params
     const params = new URLSearchParams({ metric, group_by: groupBy });
-    if (splitBy) params.set('split_by', splitBy);
+    if (splitBy && groupBy !== 'alle') params.set('split_by', splitBy);
     if (filterDim && filterVal) params.set(`filter_${filterDim}`, filterVal);
 
     const result = await fetchData(`/api/analyze?${params.toString()}`);
     if (!result || !result.data) return;
 
-    const hasSplitBy = !!splitBy;
+    const hasSplitBy = !!splitBy && groupBy !== 'alle';
     const data = result.data;
 
-    // Oppdater tittel
-    const titleEl = document.getElementById('analyse-chart-title');
-    let title = result.meta.metric_label + ' per ' + result.meta.group_by_label;
-    if (hasSplitBy) title += ' og ' + result.meta.split_by_label;
+    // Bygg tittel
+    let title = result.meta.metric_label;
+    if (groupBy !== 'alle') {
+        title += ' per ' + result.meta.group_by_label;
+        if (hasSplitBy) title += ' og ' + result.meta.split_by_label;
+    }
     if (filterDim && filterVal) {
         const dimLabel = analyseOptions.filter_dimensions.find(d => d.id === filterDim)?.label || filterDim;
         title += ` (${dimLabel}: ${filterVal})`;
     }
-    titleEl.textContent = title;
 
     // Vis resultat-container
     document.getElementById('analyse-result').classList.remove('hidden');
 
+    // "Alle" = vis KPI-kort i stedet for graf
+    if (groupBy === 'alle') {
+        document.getElementById('analyse-chart-types').classList.add('hidden');
+        const value = Object.values(data)[0];
+        const resultEl = document.getElementById('analyse-result');
+        resultEl.innerHTML = `
+            <div class="cards">
+                ${card(result.meta.metric_label, formatNumber(value))}
+            </div>
+        `;
+        // Skjul pin-knapp (ikke meningsfylt å feste et enkelt-tall)
+        return;
+    }
+
     // Bestem graftype
     const suggestion = suggestChartType(data, hasSplitBy);
     updateChartTypePills(suggestion, hasSplitBy);
+
+    // Gjenopprett canvas + chart-header om det ble fjernet av KPI-kort-rendering
+    const resultEl = document.getElementById('analyse-result');
+    if (!resultEl.querySelector('canvas')) {
+        resultEl.innerHTML = `
+            <div class="chart-header">
+                <h3 id="analyse-chart-title">${title}</h3>
+                <div class="chart-actions">
+                    <button class="btn-chart-action" id="btn-pin-analyse" title="Fest til oversikt" onclick="showPinModal()">&#x1F4CC;</button>
+                </div>
+            </div>
+            <canvas id="chart-analyse"></canvas>
+        `;
+    } else {
+        // Oppdater tittel i eksisterende header
+        const titleEl = document.getElementById('analyse-chart-title');
+        if (titleEl) titleEl.textContent = title;
+    }
 
     const chartType = analyseChartType || suggestion.default;
     renderAnalyseChart(chartType, data, hasSplitBy, result.meta);
@@ -430,10 +817,190 @@ function updateChartTypePills(suggestion, hasSplitBy) {
 }
 
 function renderAnalyseChart(chartType, data, hasSplitBy, meta) {
-    const canvasId = 'chart-analyse';
+    renderChartByType('chart-analyse', chartType, data, hasSplitBy);
+}
 
+// === PIN MODAL & API-BASED PINS ===
+
+/**
+ * Vis pin-modal. Leser nåværende analyse-verdier og lar bruker velge profil.
+ * Admin: ser dropdown med alle profiler.
+ * Bruker: ser "Mine grafer" (ingen dropdown), med hint om at admin styrer profiler.
+ */
+async function showPinModal() {
+    if (!currentUser) {
+        showToast('Logg inn for å feste grafer', true);
+        return;
+    }
+
+    const metric = document.getElementById('analyse-metric').value;
+    const groupBy = document.getElementById('analyse-group-by').value;
+    if (!metric || !groupBy) return;
+
+    const title = document.getElementById('analyse-chart-title')?.textContent || 'Ukjent';
+
+    // Vis tittelen i modalen
+    document.getElementById('pin-modal-title').textContent = title;
+
+    // Dropdown og hint-elementer
+    const profileSel = document.getElementById('pin-profile-select');
+    const profileLabel = document.getElementById('pin-profile-label');
+    const hintEl = document.getElementById('pin-modal-hint');
+
+    if (currentUser.rolle === 'admin') {
+        // Admin: vis dropdown med alle profiler
+        profileLabel.classList.remove('hidden');
+        try {
+            const profiles = await fetchData('/api/dashboard/profiles');
+            if (!profiles) throw new Error('no data');
+
+            profileSel.innerHTML = profiles.map(p => {
+                const val = p.id === null ? '' : p.id;
+                return `<option value="${val}">${p.navn}</option>`;
+            }).join('');
+        } catch {
+            profileSel.innerHTML = '<option value="">Mine grafer</option>';
+        }
+
+        // Pre-velg profilen som er aktiv på Oversikt-fanen
+        const presetSel = document.getElementById('dashboard-preset');
+        if (presetSel && presetSel.value !== undefined) {
+            const lastProfile = presetSel.value;
+            const optionExists = Array.from(profileSel.options).some(o => o.value === lastProfile);
+            if (optionExists) {
+                profileSel.value = lastProfile;
+            }
+        }
+
+        hintEl.textContent = 'Velg hvilken dashboard-profil grafen skal vises under på Oversikt-fanen.';
+    } else {
+        // Vanlig bruker: skjul dropdown, vis tydelig melding
+        profileLabel.classList.add('hidden');
+        profileSel.innerHTML = '<option value="">Mine grafer</option>';
+        hintEl.textContent = 'Grafen legges under «Mine grafer» på Oversikt-fanen. Kontakt admin for å legge til grafer i felles profiler (HR-oversikt, Ledelse osv.).';
+    }
+
+    document.getElementById('pin-modal').classList.remove('hidden');
+}
+
+function hidePinModal() {
+    document.getElementById('pin-modal').classList.add('hidden');
+}
+
+/**
+ * Bekreft pin — send til API, vis profilnavn i toast, naviger til Oversikt.
+ */
+async function confirmPin() {
+    const metric = document.getElementById('analyse-metric').value;
+    const groupBy = document.getElementById('analyse-group-by').value;
+    const splitBy = document.getElementById('analyse-split-by').value;
+    const filterDim = document.getElementById('analyse-filter-dim').value;
+    const filterVal = document.getElementById('analyse-filter-val').value;
+    const title = document.getElementById('analyse-chart-title')?.textContent || 'Ukjent';
+    const profileSelect = document.getElementById('pin-profile-select');
+    const profileIdStr = profileSelect.value;
+    const profileName = profileSelect.options[profileSelect.selectedIndex]?.text || 'Mine grafer';
+
+    if (!metric || !groupBy) return;
+
+    const body = {
+        metric,
+        group_by: groupBy,
+        split_by: splitBy || null,
+        filter_dim: filterDim || null,
+        filter_val: filterVal || null,
+        chart_type: analyseChartType || null,
+        tittel: title,
+    };
+    if (profileIdStr) {
+        body.profile_id = parseInt(profileIdStr);
+    }
+
+    try {
+        const res = await fetch('/api/dashboard/pins', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+
+        if (res.status === 409) {
+            showToast('Denne grafen finnes allerede i «' + profileName + '»', true);
+            hidePinModal();
+            return;
+        }
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Ukjent feil');
+        }
+
+        hidePinModal();
+        showToast('Graf festet til «' + profileName + '»! Går til Oversikt\u2026');
+
+        // Naviger til Oversikt-fanen og vis den aktuelle profilen
+        await _navigateToProfile(profileIdStr);
+    } catch (err) {
+        showToast('Feil ved festing: ' + err.message, true);
+    }
+}
+
+/**
+ * Naviger til Oversikt-fanen og velg angitt profil i dropdown.
+ * Brukes etter pin for å gi umiddelbar visuell bekreftelse.
+ */
+async function _navigateToProfile(profileIdStr) {
+    // Bytt til Oversikt-fanen
+    const oversiktTab = document.querySelector('[data-tab="oversikt"]');
+    if (oversiktTab) oversiktTab.click();
+
+    // Vent litt så tab-innhold rendres, deretter velg riktig profil
+    await new Promise(r => setTimeout(r, 150));
+
+    const presetSel = document.getElementById('dashboard-preset');
+    if (presetSel) {
+        presetSel.value = profileIdStr;
+        await renderDashboardCharts(profileIdStr);
+    }
+}
+
+/**
+ * Fjern en festet graf via API.
+ */
+async function unpinChart(pinId) {
+    if (!currentUser) return;
+
+    try {
+        const res = await fetch(`/api/dashboard/pins/${pinId}`, { method: 'DELETE' });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Feil ved fjerning');
+        }
+
+        // Destroy chart og fjern DOM-element
+        destroyChart('pinned-' + pinId);
+        const el = document.querySelector(`[data-pin-id="${pinId}"]`);
+        if (el) el.remove();
+
+        // Fjern tom grid-wrapper om ingen festede gjenstår
+        const container = document.getElementById('pinned-charts-container');
+        if (container) {
+            const grid = container.querySelector('.pinned-charts-grid');
+            if (grid && grid.querySelectorAll('.pinned-chart').length === 0) {
+                grid.remove();
+            }
+        }
+
+        showToast('Graf fjernet');
+    } catch (err) {
+        showToast(err.message, true);
+    }
+}
+
+/**
+ * Gjenbrukbar chart-rendering. Brukes av både analyse-tab og festede grafer.
+ * Rendrer data til en gitt canvasId med gitt chartType.
+ */
+function renderChartByType(canvasId, chartType, data, hasSplitBy) {
     if (hasSplitBy) {
-        // 2-dimensjons data: {gruppe: {inndeling: verdi}}
         const labels = Object.keys(data);
         const allSplits = new Set();
         labels.forEach(g => Object.keys(data[g]).forEach(s => allSplits.add(s)));
@@ -450,12 +1017,10 @@ function renderAnalyseChart(chartType, data, hasSplitBy, meta) {
         } else if (chartType === 'grouped') {
             renderGroupedBarChart(canvasId, labels, datasets);
         } else {
-            // horizontalBar for 2-dim — collapse to totals per group
             const totals = labels.map(g => Object.values(data[g]).reduce((a, b) => a + b, 0));
             renderHorizontalBarChart(canvasId, labels, totals);
         }
     } else {
-        // 1-dimensjons data: {gruppe: verdi}
         const labels = Object.keys(data);
         const values = Object.values(data);
 
@@ -464,7 +1029,7 @@ function renderAnalyseChart(chartType, data, hasSplitBy, meta) {
                 renderBarChart(canvasId, labels, values);
                 break;
             case 'horizontalBar':
-                renderHorizontalBarChart(canvasId, labels, values, { colors: COLORS.secondary });
+                renderHorizontalBarChart(canvasId, labels, values);
                 break;
             case 'pie':
                 renderPieChart(canvasId, labels, values);
@@ -555,6 +1120,11 @@ function loadTemplate() {
         setTimeout(() => {
             document.getElementById('analyse-filter-val').value = tmpl.filter_val;
         }, 50);
+    }
+
+    // Åpne "Flere valg" om malen har inndeling eller filter
+    if (tmpl.split_by || tmpl.filter_dim) {
+        document.getElementById('analyse-extra-options').open = true;
     }
 
     // Sett graftype
@@ -783,6 +1353,156 @@ async function downloadPDF() {
 function card(label, value, type = '') {
     const cls = type ? ` ${type}` : '';
     return `<div class="card"><div class="label">${label}</div><div class="value${cls}">${value}</div></div>`;
+}
+
+// === ADMIN PANEL ===
+
+async function loadAdmin() {
+    if (!currentUser || currentUser.rolle !== 'admin') return;
+    await Promise.all([loadAdminUsers(), loadAdminProfiles()]);
+}
+
+async function loadAdminUsers() {
+    const container = document.getElementById('admin-users-list');
+    const users = await fetchData('/api/users');
+    if (!users || users.length === 0) {
+        container.innerHTML = '<p style="color:var(--text-light)">Ingen brukere.</p>';
+        return;
+    }
+    container.innerHTML = `
+        <table>
+            <thead>
+                <tr><th>ID</th><th>Navn</th><th>E-post</th><th>Rolle</th></tr>
+            </thead>
+            <tbody>
+                ${users.map(u => `
+                    <tr>
+                        <td>${u.id}</td>
+                        <td>${u.navn}</td>
+                        <td>${u.epost}</td>
+                        <td>${u.rolle}</td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+async function adminCreateUser() {
+    const navn = document.getElementById('admin-user-name').value.trim();
+    const epost = document.getElementById('admin-user-email').value.trim();
+    const rolle = document.getElementById('admin-user-role').value;
+
+    if (!navn || !epost) {
+        showToast('Fyll inn navn og e-post', true);
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ navn, epost, rolle }),
+        });
+        if (res.status === 409) {
+            showToast('E-posten finnes allerede', true);
+            return;
+        }
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Feil ved opprettelse');
+        }
+
+        showToast(`Bruker ${navn} opprettet`);
+        document.getElementById('admin-user-name').value = '';
+        document.getElementById('admin-user-email').value = '';
+        await loadAdminUsers();
+    } catch (err) {
+        showToast(err.message, true);
+    }
+}
+
+async function loadAdminProfiles() {
+    const container = document.getElementById('admin-profiles-list');
+    const profiles = await fetchData('/api/dashboard/profiles');
+    if (!profiles || profiles.length === 0) {
+        container.innerHTML = '<p style="color:var(--text-light)">Ingen profiler.</p>';
+        return;
+    }
+
+    // Filtrer bort pseudo-profilen "Mine grafer" (id=null)
+    const real = profiles.filter(p => p.id !== null);
+    if (real.length === 0) {
+        container.innerHTML = '<p style="color:var(--text-light)">Ingen profiler opprettet enn&aring;.</p>';
+        return;
+    }
+
+    container.innerHTML = `
+        <table>
+            <thead>
+                <tr><th>ID</th><th>Navn</th><th>Beskrivelse</th><th></th></tr>
+            </thead>
+            <tbody>
+                ${real.map(p => `
+                    <tr>
+                        <td>${p.id}</td>
+                        <td>${p.navn}</td>
+                        <td>${p.beskrivelse || '–'}</td>
+                        <td><button class="btn-admin-delete" onclick="adminDeleteProfile(${p.id}, '${p.navn.replace(/'/g, "\\'")}')">Slett</button></td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+async function adminCreateProfile() {
+    const navn = document.getElementById('admin-profile-name').value.trim();
+    const beskrivelse = document.getElementById('admin-profile-desc').value.trim();
+
+    if (!navn) {
+        showToast('Fyll inn profilnavn', true);
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/dashboard/profiles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ navn, beskrivelse }),
+        });
+        if (res.status === 409) {
+            showToast('Profil med dette navnet finnes allerede', true);
+            return;
+        }
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Feil ved opprettelse');
+        }
+
+        showToast(`Profil "${navn}" opprettet`);
+        document.getElementById('admin-profile-name').value = '';
+        document.getElementById('admin-profile-desc').value = '';
+        await loadAdminProfiles();
+    } catch (err) {
+        showToast(err.message, true);
+    }
+}
+
+async function adminDeleteProfile(profileId, profileName) {
+    if (!confirm(`Slett profilen "${profileName}" og alle tilhørende pins?`)) return;
+
+    try {
+        const res = await fetch(`/api/dashboard/profiles/${profileId}`, { method: 'DELETE' });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Feil ved sletting');
+        }
+        showToast(`Profil "${profileName}" slettet`);
+        await loadAdminProfiles();
+    } catch (err) {
+        showToast(err.message, true);
+    }
 }
 
 // === START ===

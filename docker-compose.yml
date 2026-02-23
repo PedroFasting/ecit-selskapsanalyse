@@ -1,6 +1,14 @@
-# HR Analyse — Docker Compose
-# Start med: docker compose up
-# Tilgjengelig på: http://localhost:8080
+# HR Analyse — Docker Compose (basis)
+#
+# UTVIKLING (standard):
+#   docker compose up
+#   → Monterer kildekode, auto-reload ved endringer
+#   → Override-filen (docker-compose.override.yml) leses automatisk
+#
+# PRODUKSJON:
+#   docker compose -f docker-compose.yml up -d
+#   → Bruker kun denne filen, ingen kilde-mount, ingen reload
+#   → Koden bakes inn i Docker-imaget ved build
 
 services:
   hr-analyse:

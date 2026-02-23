@@ -518,6 +518,129 @@ class TestAnalyze:
         all_total = sum(all_emps["data"].values())
         assert all_total >= active_total
 
+    def test_analyze_alle_total(self, client):
+        """group_by=alle returnerer én totalverdi."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=alle"
+        ))
+        assert data["meta"]["group_by"] == "alle"
+        assert data["meta"]["group_by_label"] == "Alle (total)"
+        assert "Alle" in data["data"]
+        assert isinstance(data["data"]["Alle"], int)
+        assert data["data"]["Alle"] > 0
+
+    def test_analyze_alle_with_filter(self, client):
+        """group_by=alle med filter returnerer filtrert total."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=alle&filter_arbeidsland=Norge"
+        ))
+        assert "Alle" in data["data"]
+        assert data["data"]["Alle"] > 0
+
+    def test_analyze_options_includes_alle(self, client):
+        """Options inkluderer 'alle' som siste dimensjon."""
+        data = assert_json_ok(client.get("/api/analyze/options"))
+        dims = data["dimensions"]
+        assert dims[-1]["id"] == "alle"
+        assert dims[-1]["label"] == "Alle (total)"
+
+    # --- Nye metrikker ---
+
+    def test_analyze_avg_tenure(self, client):
+        """avg_tenure returnerer ansiennitet i år."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=avg_tenure&group_by=avdeling"
+        ))
+        assert data["meta"]["metric"] == "avg_tenure"
+        assert data["meta"]["metric_label"] == "Snitt ansiennitet (år)"
+        for val in data["data"].values():
+            assert isinstance(val, (int, float))
+
+    def test_analyze_avg_work_hours(self, client):
+        """avg_work_hours returnerer arbeidstid."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=avg_work_hours&group_by=avdeling"
+        ))
+        assert data["meta"]["metric"] == "avg_work_hours"
+        for val in data["data"].values():
+            assert isinstance(val, (int, float))
+            assert val > 0
+
+    def test_analyze_pct_female(self, client):
+        """pct_female returnerer andel kvinner i prosent."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=pct_female&group_by=avdeling"
+        ))
+        assert data["meta"]["metric"] == "pct_female"
+        for val in data["data"].values():
+            assert 0 <= val <= 100
+
+    def test_analyze_pct_leaders(self, client):
+        """pct_leaders returnerer andel ledere i prosent."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=pct_leaders&group_by=avdeling"
+        ))
+        assert data["meta"]["metric"] == "pct_leaders"
+        for val in data["data"].values():
+            assert 0 <= val <= 100
+
+    # --- Nye dimensjoner ---
+
+    def test_analyze_tenure_gruppe(self, client):
+        """tenure_gruppe som dimensjon."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=tenure_gruppe"
+        ))
+        valid_groups = {"Under 1 år", "1-2 år", "2-5 år", "5-10 år", "Over 10 år", "Ukjent"}
+        for group in data["data"].keys():
+            assert group in valid_groups
+
+    def test_analyze_nasjonalitet(self, client):
+        """nasjonalitet som dimensjon."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=nasjonalitet"
+        ))
+        assert len(data["data"]) > 0
+
+    def test_analyze_ansettelsesniva(self, client):
+        """ansettelsesniva som dimensjon."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=ansettelsesniva"
+        ))
+        assert len(data["data"]) > 0
+
+    def test_analyze_arbeidssted(self, client):
+        """arbeidssted som dimensjon."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=arbeidssted"
+        ))
+        assert len(data["data"]) > 0
+
+    def test_analyze_options_includes_new_metrics(self, client):
+        """Options inkluderer nye metrikker."""
+        data = assert_json_ok(client.get("/api/analyze/options"))
+        metric_ids = [m["id"] for m in data["metrics"]]
+        assert "avg_tenure" in metric_ids
+        assert "avg_work_hours" in metric_ids
+        assert "pct_female" in metric_ids
+        assert "pct_leaders" in metric_ids
+
+    def test_analyze_options_includes_new_dimensions(self, client):
+        """Options inkluderer nye dimensjoner."""
+        data = assert_json_ok(client.get("/api/analyze/options"))
+        dim_ids = [d["id"] for d in data["dimensions"]]
+        assert "tenure_gruppe" in dim_ids
+        assert "ansettelsesniva" in dim_ids
+        assert "nasjonalitet" in dim_ids
+        assert "arbeidssted" in dim_ids
+
+    def test_analyze_filter_nasjonalitet(self, client):
+        """Filter på nasjonalitet fungerer."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=avdeling&filter_nasjonalitet=Norsk"
+        ))
+        assert len(data["data"]) > 0
+
 
 class TestActiveOnlyParam:
     """Verifiser at active_only-parameteren fungerer på tvers av endepunkter."""

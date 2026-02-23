@@ -24,6 +24,83 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     return conn
 
 
+# Standard dashboard-profiler (erstatter hardkodede DASHBOARD_PRESETS i JS)
+_SEED_PROFILES = [
+    {
+        'slug': 'hr-oversikt',
+        'navn': 'HR-oversikt',
+        'beskrivelse': 'Oversikt over organisasjonen',
+        'pins': [
+            {'metric': 'count', 'group_by': 'arbeidsland', 'chart_type': 'bar', 'tittel': 'Ansatte per land'},
+            {'metric': 'count', 'group_by': 'kjonn', 'chart_type': 'pie', 'tittel': 'Kjønnsfordeling'},
+            {'metric': 'count', 'group_by': 'aldersgruppe', 'chart_type': 'bar', 'tittel': 'Aldersfordeling'},
+            {'metric': 'avg_tenure', 'group_by': 'avdeling', 'chart_type': 'bar', 'tittel': 'Snitt ansiennitet per avdeling'},
+        ]
+    },
+    {
+        'slug': 'ledelse',
+        'navn': 'Ledelse',
+        'beskrivelse': 'Nøkkeltall for ledelsen',
+        'pins': [
+            {'metric': 'count', 'group_by': 'arbeidsland', 'chart_type': 'bar', 'tittel': 'Ansatte per land'},
+            {'metric': 'sum_salary', 'group_by': 'arbeidsland', 'chart_type': 'bar', 'tittel': 'Lønnsmasse per land'},
+            {'metric': 'pct_leaders', 'group_by': 'avdeling', 'chart_type': 'bar', 'tittel': 'Lederandel per avdeling'},
+            {'metric': 'count', 'group_by': 'avdeling', 'split_by': 'kjonn', 'chart_type': 'stacked', 'tittel': 'Avdelinger fordelt på kjønn'},
+        ]
+    },
+    {
+        'slug': 'lonn-analyse',
+        'navn': 'Lønnsanalyse',
+        'beskrivelse': 'Lønnsoversikt på tvers',
+        'pins': [
+            {'metric': 'avg_salary', 'group_by': 'avdeling', 'chart_type': 'bar', 'tittel': 'Snittlønn per avdeling'},
+            {'metric': 'avg_salary', 'group_by': 'arbeidsland', 'chart_type': 'bar', 'tittel': 'Snittlønn per land'},
+            {'metric': 'avg_salary', 'group_by': 'kjonn', 'chart_type': 'bar', 'tittel': 'Snittlønn per kjønn'},
+        ]
+    },
+    {
+        'slug': 'mangfold',
+        'navn': 'Mangfold',
+        'beskrivelse': 'Kjønnsbalanse, nasjonalitet og aldersfordeling',
+        'pins': [
+            {'metric': 'pct_female', 'group_by': 'avdeling', 'chart_type': 'bar', 'tittel': 'Andel kvinner per avdeling'},
+            {'metric': 'count', 'group_by': 'nasjonalitet', 'chart_type': 'pie', 'tittel': 'Nasjonalitetsfordeling'},
+            {'metric': 'count', 'group_by': 'aldersgruppe', 'split_by': 'kjonn', 'chart_type': 'stacked', 'tittel': 'Alder fordelt på kjønn'},
+        ]
+    },
+]
+
+
+def _seed_defaults(cursor: sqlite3.Cursor) -> None:
+    """Opprett standard admin-bruker og dashboard-profiler hvis de ikke finnes."""
+    # Admin-bruker
+    cursor.execute("SELECT COUNT(*) FROM brukere")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(
+            "INSERT INTO brukere (navn, epost, rolle) VALUES (?, ?, ?)",
+            ("Admin", "admin@ecit.no", "admin"),
+        )
+
+    # Dashboard-profiler
+    cursor.execute("SELECT COUNT(*) FROM dashboard_profiler")
+    if cursor.fetchone()[0] == 0:
+        for idx, profile in enumerate(_SEED_PROFILES):
+            cursor.execute(
+                "INSERT INTO dashboard_profiler (slug, navn, beskrivelse, sortering) VALUES (?, ?, ?, ?)",
+                (profile['slug'], profile['navn'], profile['beskrivelse'], idx),
+            )
+            profil_id = cursor.lastrowid
+            for pin_idx, pin in enumerate(profile['pins']):
+                cursor.execute(
+                    """INSERT INTO dashboard_pins
+                       (profil_id, metric, group_by, split_by, chart_type, tittel, sortering)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (profil_id, pin['metric'], pin['group_by'],
+                     pin.get('split_by'), pin['chart_type'],
+                     pin['tittel'], pin_idx),
+                )
+
+
 def init_database(db_path: Optional[Path] = None) -> None:
     """
     Opprett databaseskjema hvis det ikke eksisterer.
@@ -127,7 +204,58 @@ def init_database(db_path: Optional[Path] = None) -> None:
         status TEXT
     )
     """)
-    
+
+    # --- Dashboard-system: brukere, profiler, pins ---
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS brukere (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        navn TEXT NOT NULL,
+        epost TEXT UNIQUE NOT NULL,
+        rolle TEXT NOT NULL DEFAULT 'bruker',
+        aktiv BOOLEAN DEFAULT 1,
+        opprettet DATETIME DEFAULT CURRENT_TIMESTAMP,
+        sist_innlogget DATETIME
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS dashboard_profiler (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        slug TEXT UNIQUE NOT NULL,
+        navn TEXT NOT NULL,
+        beskrivelse TEXT,
+        opprettet_av INTEGER REFERENCES brukere(id),
+        synlig_for TEXT DEFAULT 'alle',
+        sortering INTEGER DEFAULT 0,
+        opprettet DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS dashboard_pins (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bruker_id INTEGER REFERENCES brukere(id),
+        profil_id INTEGER REFERENCES dashboard_profiler(id),
+        metric TEXT NOT NULL,
+        group_by TEXT NOT NULL,
+        split_by TEXT,
+        filter_dim TEXT,
+        filter_val TEXT,
+        chart_type TEXT,
+        tittel TEXT NOT NULL,
+        sortering INTEGER DEFAULT 0,
+        opprettet DATETIME DEFAULT CURRENT_TIMESTAMP,
+        CHECK (bruker_id IS NOT NULL OR profil_id IS NOT NULL)
+    )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pins_bruker ON dashboard_pins(bruker_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pins_profil ON dashboard_pins(profil_id)")
+
+    # Seed standard-profiler og admin-bruker (kun hvis tabellene er tomme)
+    _seed_defaults(cursor)
+
     conn.commit()
     conn.close()
     print(f"Database initialisert: {db_path or DEFAULT_DB_PATH}")

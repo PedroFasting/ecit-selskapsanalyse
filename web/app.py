@@ -62,11 +62,13 @@ from web.routes.analytics import router as analytics_router
 from web.routes.import_routes import router as import_router
 from web.routes.report import router as report_router
 from web.routes.analyze import router as analyze_router
+from web.routes.dashboard import router as dashboard_router
 
 app.include_router(analytics_router, prefix="/api")
 app.include_router(import_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
 app.include_router(analyze_router, prefix="/api")
+app.include_router(dashboard_router, prefix="/api")
 
 
 @app.get("/")

@@ -1,0 +1,16 @@
+# Utviklingsmodus — leses AUTOMATISK av «docker compose up»
+#
+# Hva dette gjør:
+#   - Monterer web/ og hr/ fra disk inn i containeren
+#   - Kjører uvicorn med --reload (auto-restart ved filendring)
+#   - Du slipper å rebuilde imaget for hver kodeendring
+#
+# For produksjon: kjør uten denne filen:
+#   docker compose -f docker-compose.yml up -d
+
+services:
+  hr-analyse:
+    volumes:
+      - ./web:/app/web
+      - ./hr:/app/hr
+    command: ["uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
