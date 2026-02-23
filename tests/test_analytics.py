@@ -344,8 +344,11 @@ class TestSalary:
         result = analytics.salary_summary()
         assert result["antall_med_lonn"] == 8  # active employees with salary
         assert result["gjennomsnitt"] > 0
+        assert result["median"] > 0
         assert result["min"] > 0
         assert result["maks"] >= result["min"]
+        assert result["median"] >= result["min"]
+        assert result["median"] <= result["maks"]
         assert result["total_lonnsmasse"] > 0
 
     def test_by_department(self, analytics):

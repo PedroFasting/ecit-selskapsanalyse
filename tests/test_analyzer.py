@@ -9,7 +9,7 @@ import pytest
 
 from hr.analyzer import (
     build_analysis_query, run_analysis, get_filter_values,
-    METRICS, DIMENSIONS, FILTERS, AGE_CASE_EXPR,
+    METRICS, DIMENSIONS, FILTERS, AGE_CASE_EXPR, TENURE_CASE_EXPR,
 )
 
 
@@ -75,7 +75,7 @@ class TestBuildQuery:
 
     def test_salary_metric_filters_null_lonn(self):
         """Lønnsmetrikker legger til 'lonn IS NOT NULL'."""
-        for m in ["avg_salary", "min_salary", "max_salary", "sum_salary"]:
+        for m in ["avg_salary", "min_salary", "max_salary", "median_salary", "sum_salary"]:
             sql, _ = build_analysis_query(metric=m, group_by="avdeling")
             assert "lonn IS NOT NULL" in sql, f"Mangler lonn-filter for {m}"
 
@@ -101,6 +101,34 @@ class TestBuildQuery:
         with pytest.raises(ValueError, match="Ugyldig gruppering"):
             build_analysis_query(metric="count", group_by="invalid")
 
+    def test_alle_no_group_by(self):
+        """group_by='alle' bygger SQL uten GROUP BY."""
+        sql, params = build_analysis_query(metric="count", group_by="alle")
+        assert "COUNT(*) AS verdi" in sql
+        assert "GROUP BY" not in sql
+        assert "er_aktiv = 1" in sql
+        assert params == ()
+
+    def test_alle_with_filter(self):
+        """group_by='alle' med filter fungerer."""
+        sql, params = build_analysis_query(
+            metric="avg_salary", group_by="alle",
+            filters={"arbeidsland": "Norge"}
+        )
+        assert "AVG(lonn) AS verdi" in sql
+        assert "GROUP BY" not in sql
+        assert "arbeidsland = ?" in sql
+        assert "lonn IS NOT NULL" in sql
+        assert params == ("Norge",)
+
+    def test_alle_ignores_split_by(self):
+        """group_by='alle' bygger SQL uten GROUP BY selv med split_by (split_by ignoreres i praksis)."""
+        sql, params = build_analysis_query(
+            metric="count", group_by="alle", split_by="kjonn"
+        )
+        # split_by valideres men "alle" returnerer tidlig uten GROUP BY
+        assert "GROUP BY" not in sql
+
     def test_invalid_split_by_raises(self):
         """Ugyldig inndeling gir ValueError."""
         with pytest.raises(ValueError, match="Ugyldig inndeling"):
@@ -113,6 +141,65 @@ class TestBuildQuery:
                 metric="count", group_by="kjonn",
                 filters={"aldersgruppe": "25-34"}  # aldersgruppe er ikke filtrerbar
             )
+
+    # --- Nye metrikker ---
+
+    def test_avg_tenure_filters_null_startdato(self):
+        """avg_tenure legger til 'ansettelsens_startdato IS NOT NULL'."""
+        sql, _ = build_analysis_query(metric="avg_tenure", group_by="avdeling")
+        assert "ansettelsens_startdato IS NOT NULL" in sql
+        assert "JULIANDAY" in sql
+
+    def test_avg_work_hours_filters_null(self):
+        """avg_work_hours legger til 'arbeidstid_per_uke IS NOT NULL'."""
+        sql, _ = build_analysis_query(metric="avg_work_hours", group_by="avdeling")
+        assert "arbeidstid_per_uke IS NOT NULL" in sql
+
+    def test_pct_female_uses_case(self):
+        """pct_female bruker CASE-uttrykk for kjønn."""
+        sql, _ = build_analysis_query(metric="pct_female", group_by="avdeling")
+        assert "CASE WHEN kjonn = 'Kvinne'" in sql
+
+    def test_pct_leaders_uses_case(self):
+        """pct_leaders bruker CASE-uttrykk for er_leder."""
+        sql, _ = build_analysis_query(metric="pct_leaders", group_by="avdeling")
+        assert "CASE WHEN er_leder IN" in sql
+
+    def test_median_salary_returns_raw_data_query(self):
+        """median_salary har None som SQL og returnerer rådataspørring."""
+        sql, _ = build_analysis_query(metric="median_salary", group_by="avdeling")
+        assert "lonn AS verdi" in sql
+        assert "GROUP BY" not in sql  # Ingen SQL-aggregering, beregnes i Python
+        assert "lonn IS NOT NULL" in sql
+
+    def test_median_salary_alle_returns_raw_query(self):
+        """median_salary med group_by='alle' returnerer rådataspørring."""
+        sql, _ = build_analysis_query(metric="median_salary", group_by="alle")
+        assert "lonn AS verdi" in sql
+        assert "GROUP BY" not in sql
+
+    # --- Nye dimensjoner ---
+
+    def test_tenure_gruppe_uses_case(self):
+        """tenure_gruppe-dimensjon bruker CASE-uttrykk."""
+        sql, _ = build_analysis_query(metric="count", group_by="tenure_gruppe")
+        assert "JULIANDAY" in sql
+        assert "ansettelsens_startdato IS NOT NULL" in sql
+
+    def test_ansettelsesniva_dimension(self):
+        """ansettelsesniva bruker kolonnenavn direkte."""
+        sql, _ = build_analysis_query(metric="count", group_by="ansettelsesniva")
+        assert "COALESCE(ansettelsesniva, 'Ukjent')" in sql
+
+    def test_nasjonalitet_dimension(self):
+        """nasjonalitet bruker kolonnenavn direkte."""
+        sql, _ = build_analysis_query(metric="count", group_by="nasjonalitet")
+        assert "COALESCE(nasjonalitet, 'Ukjent')" in sql
+
+    def test_arbeidssted_dimension(self):
+        """arbeidssted bruker kolonnenavn direkte."""
+        sql, _ = build_analysis_query(metric="count", group_by="arbeidssted")
+        assert "COALESCE(arbeidssted, 'Ukjent')" in sql
 
 
 # ===========================================================================
@@ -205,6 +292,193 @@ class TestRunAnalysis:
         for group in data.keys():
             assert group in valid_groups, f"Uventet aldersgruppe: {group}"
 
+    def test_alle_returns_single_value(self, test_db):
+        """group_by='alle' returnerer én enkelt totalverdi."""
+        result = run_analysis(
+            metric="count", group_by="alle", db_path=test_db
+        )
+        assert result["meta"]["group_by"] == "alle"
+        assert result["meta"]["group_by_label"] == "Alle (total)"
+        assert result["meta"]["total_groups"] == 1
+        data = result["data"]
+        assert "Alle" in data
+        assert isinstance(data["Alle"], int)
+        assert data["Alle"] > 0  # Skal ha aktive ansatte
+
+    def test_alle_with_filter(self, test_db):
+        """group_by='alle' med filter returnerer filtrert total."""
+        result_all = run_analysis(
+            metric="count", group_by="alle", db_path=test_db
+        )
+        result_norge = run_analysis(
+            metric="count", group_by="alle",
+            filters={"arbeidsland": "Norge"}, db_path=test_db
+        )
+        # Filtrert total skal være <= total
+        assert result_norge["data"]["Alle"] <= result_all["data"]["Alle"]
+        assert result_norge["data"]["Alle"] > 0
+
+    def test_alle_avg_salary(self, test_db):
+        """group_by='alle' fungerer med gjennomsnittslønn."""
+        result = run_analysis(
+            metric="avg_salary", group_by="alle", db_path=test_db
+        )
+        assert "Alle" in result["data"]
+        assert result["data"]["Alle"] > 0
+
+    # --- Median ---
+
+    def test_median_salary_by_avdeling(self, test_db):
+        """Median lønn per avdeling returnerer tall."""
+        result = run_analysis(
+            metric="median_salary", group_by="avdeling", db_path=test_db
+        )
+        assert result["meta"]["metric"] == "median_salary"
+        assert result["meta"]["metric_label"] == "Median lønn"
+        data = result["data"]
+        assert len(data) > 0
+        for key, val in data.items():
+            assert isinstance(val, (int, float))
+            assert val > 0
+
+    def test_median_salary_alle(self, test_db):
+        """Median lønn for alle returnerer én verdi."""
+        result = run_analysis(
+            metric="median_salary", group_by="alle", db_path=test_db
+        )
+        assert "Alle" in result["data"]
+        assert result["data"]["Alle"] > 0
+
+    def test_median_salary_with_split(self, test_db):
+        """Median lønn med split_by returnerer nested dict."""
+        result = run_analysis(
+            metric="median_salary", group_by="avdeling", split_by="kjonn",
+            db_path=test_db
+        )
+        assert result["meta"]["split_by"] == "kjonn"
+        data = result["data"]
+        for group, splits in data.items():
+            assert isinstance(splits, dict)
+            for split_key, val in splits.items():
+                assert isinstance(val, (int, float))
+                assert val > 0
+
+    def test_median_between_min_and_max(self, test_db):
+        """Median lønn skal ligge mellom min og max."""
+        median_result = run_analysis(
+            metric="median_salary", group_by="alle", db_path=test_db
+        )
+        min_result = run_analysis(
+            metric="min_salary", group_by="alle", db_path=test_db
+        )
+        max_result = run_analysis(
+            metric="max_salary", group_by="alle", db_path=test_db
+        )
+        median_val = median_result["data"]["Alle"]
+        min_val = min_result["data"]["Alle"]
+        max_val = max_result["data"]["Alle"]
+        assert min_val <= median_val <= max_val
+
+    # --- Nye metrikker ---
+
+    def test_avg_tenure_by_avdeling(self, test_db):
+        """Snitt ansiennitet per avdeling returnerer tall i år."""
+        result = run_analysis(
+            metric="avg_tenure", group_by="avdeling", db_path=test_db
+        )
+        assert result["meta"]["metric_label"] == "Snitt ansiennitet (år)"
+        data = result["data"]
+        assert len(data) > 0
+        for key, val in data.items():
+            assert isinstance(val, (int, float))
+            assert val >= 0
+
+    def test_avg_tenure_alle(self, test_db):
+        """Snitt ansiennitet for alle returnerer én verdi."""
+        result = run_analysis(
+            metric="avg_tenure", group_by="alle", db_path=test_db
+        )
+        assert "Alle" in result["data"]
+        assert result["data"]["Alle"] > 0
+
+    def test_avg_work_hours_by_avdeling(self, test_db):
+        """Snitt arbeidstid per avdeling returnerer tall."""
+        result = run_analysis(
+            metric="avg_work_hours", group_by="avdeling", db_path=test_db
+        )
+        assert result["meta"]["metric_label"] == "Snitt arbeidstid (t/uke)"
+        data = result["data"]
+        assert len(data) > 0
+        for key, val in data.items():
+            assert isinstance(val, (int, float))
+            assert val > 0
+
+    def test_pct_female_by_avdeling(self, test_db):
+        """Andel kvinner per avdeling returnerer prosent."""
+        result = run_analysis(
+            metric="pct_female", group_by="avdeling", db_path=test_db
+        )
+        assert result["meta"]["metric_label"] == "Andel kvinner (%)"
+        data = result["data"]
+        assert len(data) > 0
+        for key, val in data.items():
+            assert isinstance(val, (int, float))
+            assert 0 <= val <= 100
+
+    def test_pct_leaders_by_avdeling(self, test_db):
+        """Andel ledere per avdeling returnerer prosent."""
+        result = run_analysis(
+            metric="pct_leaders", group_by="avdeling", db_path=test_db
+        )
+        assert result["meta"]["metric_label"] == "Andel ledere (%)"
+        data = result["data"]
+        assert len(data) > 0
+        for key, val in data.items():
+            assert isinstance(val, (int, float))
+            assert 0 <= val <= 100
+
+    # --- Nye dimensjoner ---
+
+    def test_tenure_gruppe_dimension(self, test_db):
+        """tenure_gruppe-dimensjon returnerer beregnede grupper."""
+        result = run_analysis(
+            metric="count", group_by="tenure_gruppe", db_path=test_db
+        )
+        data = result["data"]
+        valid_groups = {"Under 1 år", "1-2 år", "2-5 år", "5-10 år", "Over 10 år", "Ukjent"}
+        for group in data.keys():
+            assert group in valid_groups, f"Uventet ansiennitetsgruppe: {group}"
+
+    def test_nasjonalitet_dimension(self, test_db):
+        """nasjonalitet-dimensjon returnerer kjente nasjonaliteter."""
+        result = run_analysis(
+            metric="count", group_by="nasjonalitet", db_path=test_db
+        )
+        data = result["data"]
+        assert len(data) > 0
+        # Testdata: Norsk, Dansk, Svensk
+        assert "Norsk" in data
+
+    def test_ansettelsesniva_dimension(self, test_db):
+        """ansettelsesniva-dimensjon returnerer nivåer fra testdata."""
+        result = run_analysis(
+            metric="count", group_by="ansettelsesniva", db_path=test_db
+        )
+        data = result["data"]
+        assert len(data) > 0
+        # Testdata: Medarbeider, Leder, Senior, Junior
+        assert "Medarbeider" in data or "Leder" in data
+
+    def test_arbeidssted_dimension(self, test_db):
+        """arbeidssted-dimensjon returnerer lokasjoner fra testdata."""
+        result = run_analysis(
+            metric="count", group_by="arbeidssted", db_path=test_db
+        )
+        data = result["data"]
+        assert len(data) > 0
+        # Testdata: Oslo, Bergen, København, Stockholm
+        assert "Oslo" in data
+
 
 # ===========================================================================
 # get_filter_values
@@ -251,10 +525,14 @@ class TestWhitelists:
         """aldersgruppe er en beregnet dimensjon og skal ikke være filtrerbar."""
         assert "aldersgruppe" not in FILTERS
 
+    def test_tenure_gruppe_not_in_filters(self):
+        """tenure_gruppe er en beregnet dimensjon og skal ikke være filtrerbar."""
+        assert "tenure_gruppe" not in FILTERS
+
     def test_all_metrics_have_labels(self):
-        """Alle metrikker har SQL-funksjon og visningsnavn."""
+        """Alle metrikker har SQL-funksjon (eller None for spesialhåndtering) og visningsnavn."""
         for key, (sql_func, label) in METRICS.items():
-            assert len(sql_func) > 0
+            assert sql_func is None or len(sql_func) > 0
             assert len(label) > 0
 
     def test_all_dimensions_have_labels(self):

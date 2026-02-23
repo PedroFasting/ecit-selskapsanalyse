@@ -241,7 +241,7 @@ function renderBarChart(canvasId, labels, data, options = {}) {
             labels,
             datasets: [{
                 data,
-                backgroundColor: options.colors || COLORS.primary,
+                backgroundColor: options.colors || labels.map((_, i) => PALETTE[i % PALETTE.length]),
                 borderRadius: 4,
             }],
         },
@@ -274,7 +274,7 @@ function renderHorizontalBarChart(canvasId, labels, data, options = {}) {
             labels,
             datasets: [{
                 data,
-                backgroundColor: options.colors || COLORS.primary,
+                backgroundColor: options.colors || labels.map((_, i) => PALETTE[i % PALETTE.length]),
                 borderRadius: 4,
             }],
         },

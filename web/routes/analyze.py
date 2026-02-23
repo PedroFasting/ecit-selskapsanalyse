@@ -17,8 +17,8 @@ router = APIRouter()
 
 @router.get("/analyze")
 async def analyze(
-    metric: str = Query(..., description="Metrikk: count, avg_salary, min_salary, max_salary, sum_salary, avg_age"),
-    group_by: str = Query(..., description="Gruppering: avdeling, juridisk_selskap, arbeidsland, kjonn, aldersgruppe, jobbfamilie, ansettelsetype, er_leder, kostsenter"),
+    metric: str = Query(..., description="Metrikk: count, avg_salary, min_salary, max_salary, sum_salary, avg_age, avg_tenure, avg_work_hours, pct_female, pct_leaders"),
+    group_by: str = Query(..., description="Gruppering: alle, avdeling, juridisk_selskap, arbeidsland, kjonn, aldersgruppe, jobbfamilie, ansettelsetype, er_leder, kostsenter, tenure_gruppe, ansettelsesniva, nasjonalitet, arbeidssted"),
     split_by: Optional[str] = Query(None, description="Valgfri ekstra inndeling (samme valg som group_by)"),
     active_only: bool = Query(True, description="Bare aktive ansatte"),
     filter_avdeling: Optional[str] = Query(None),
@@ -29,6 +29,9 @@ async def analyze(
     filter_ansettelsetype: Optional[str] = Query(None),
     filter_kostsenter: Optional[str] = Query(None),
     filter_er_leder: Optional[str] = Query(None),
+    filter_ansettelsesniva: Optional[str] = Query(None),
+    filter_nasjonalitet: Optional[str] = Query(None),
+    filter_arbeidssted: Optional[str] = Query(None),
 ):
     """
     Generisk analyse-endepunkt.
@@ -45,6 +48,9 @@ async def analyze(
         "ansettelsetype": filter_ansettelsetype,
         "kostsenter": filter_kostsenter,
         "er_leder": filter_er_leder,
+        "ansettelsesniva": filter_ansettelsesniva,
+        "nasjonalitet": filter_nasjonalitet,
+        "arbeidssted": filter_arbeidssted,
     }
     for key, value in filter_params.items():
         if value is not None:
@@ -77,6 +83,8 @@ async def analyze_options(active_only: bool = Query(True)):
         ],
         "dimensions": [
             {"id": k, "label": v[1]} for k, v in DIMENSIONS.items()
+        ] + [
+            {"id": "alle", "label": "Alle (total)"},
         ],
         "filter_dimensions": [
             {"id": k, "label": DIMENSIONS[k][1]}

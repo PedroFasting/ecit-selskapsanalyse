@@ -7,6 +7,7 @@ from datetime import datetime, date
 from typing import Optional, Dict, List, Tuple
 from pathlib import Path
 from collections import defaultdict
+from statistics import median as _median
 
 from .database import get_connection, DEFAULT_DB_PATH
 
@@ -717,10 +718,15 @@ class HRAnalytics:
         if not result or result[0]['antall'] == 0:
             return {'antall': 0, 'melding': 'Ingen lønnsdata tilgjengelig'}
         
+        # Hent alle lønnsverdier for median-beregning
+        salary_rows = self._query(f"SELECT lonn FROM ansatte {where} ORDER BY lonn")
+        median_val = round(_median([r['lonn'] for r in salary_rows]), 0) if salary_rows else 0
+        
         r = result[0]
         return {
             'antall_med_lonn': r['antall'],
             'gjennomsnitt': round(r['snitt'], 0) if r['snitt'] else 0,
+            'median': median_val,
             'min': r['min'],
             'maks': r['maks'],
             'total_lonnsmasse': round(r['total'], 0) if r['total'] else 0
