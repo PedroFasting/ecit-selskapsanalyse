@@ -98,7 +98,7 @@ async def database_status():
 
         return {
             "database": str(DEFAULT_DB_PATH),
-            "totalt_ansatte": summary["totalt"],
+            "totalt_ansatte": summary["aktive"],
             "aktive_ansatte": summary["aktive"],
             "sluttede": summary["sluttede"],
             "siste_import": siste_import,

@@ -43,6 +43,7 @@ function getChartTitle(canvasId) {
 
 /**
  * Bygg et eksport-canvas med hvit bakgrunn og tittel over grafen.
+ * For pie/doughnut-diagrammer tegnes prosentetiketter på kakestykkene.
  */
 function buildExportCanvas(canvasId) {
     const canvas = document.getElementById(canvasId);
@@ -72,7 +73,71 @@ function buildExportCanvas(canvasId) {
     // Tegn grafen
     ctx.drawImage(canvas, padding, padding + titleHeight);
 
+    // Tegn prosentetiketter for pie/doughnut-diagrammer
+    drawPiePercentLabels(ctx, canvasId, padding, padding + titleHeight);
+
     return tempCanvas;
+}
+
+/**
+ * Tegn prosentetiketter på pie/doughnut-diagrammer i eksport-canvaset.
+ * Beregner vinkel-midtpunkt for hvert kakestykke og plasserer etiketten
+ * langs en radius mellom senter og ytterkant.
+ */
+function drawPiePercentLabels(ctx, canvasId, offsetX, offsetY) {
+    const chart = chartInstances[canvasId];
+    if (!chart) return;
+    if (chart.config.type !== 'pie' && chart.config.type !== 'doughnut') return;
+
+    const meta = chart.getDatasetMeta(0);
+    if (!meta || !meta.data || meta.data.length === 0) return;
+
+    const dataset = chart.data.datasets[0];
+    const dataValues = dataset.data;
+    const total = dataValues.reduce((a, b) => a + b, 0);
+    if (total === 0) return;
+
+    ctx.save();
+    ctx.font = 'bold 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    meta.data.forEach((arc, i) => {
+        const value = dataValues[i];
+        if (value == null || value === 0) return;
+
+        const pct = ((value / total) * 100).toFixed(1);
+        // Hopp over svært små skiver (under 3%) — etiketten får ikke plass
+        if (parseFloat(pct) < 3) return;
+
+        const startAngle = arc.startAngle;
+        const endAngle = arc.endAngle;
+        const midAngle = (startAngle + endAngle) / 2;
+
+        const outerRadius = arc.outerRadius;
+        const innerRadius = arc.innerRadius || 0;
+        // Plasser etiketten midt mellom inner og outer radius
+        const labelRadius = innerRadius + (outerRadius - innerRadius) * 0.65;
+
+        const cx = arc.x + offsetX;
+        const cy = arc.y + offsetY;
+        const lx = cx + Math.cos(midAngle) * labelRadius;
+        const ly = cy + Math.sin(midAngle) * labelRadius;
+
+        // Hvit bakgrunn bak teksten for lesbarhet
+        const text = `${pct}%`;
+        const textWidth = ctx.measureText(text).width;
+        const bgPadX = 3;
+        const bgPadY = 2;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.fillRect(lx - textWidth / 2 - bgPadX, ly - 7 - bgPadY, textWidth + bgPadX * 2, 14 + bgPadY * 2);
+
+        // Tekst
+        ctx.fillStyle = '#03223F';
+        ctx.fillText(text, lx, ly);
+    });
+
+    ctx.restore();
 }
 
 /**

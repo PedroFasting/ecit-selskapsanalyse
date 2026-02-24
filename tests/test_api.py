@@ -77,11 +77,10 @@ class TestOverview:
 
     def test_summary(self, client):
         data = assert_json_ok(client.get("/api/overview/summary"))
-        assert "totalt" in data
         assert "aktive" in data
+        assert "nye_siste_3_mnd" in data
         assert "sluttede" in data
         assert "gjennomsnitt_alder" in data
-        assert data["totalt"] == 10  # 10 testansatte
 
 
 # ===========================================================================
@@ -254,6 +253,40 @@ class TestSalary:
         data = assert_json_ok(client.get("/api/salary/by-gender"))
         assert isinstance(data, dict)
 
+    def test_by_department(self, client):
+        data = assert_json_ok(client.get("/api/salary/by-department"))
+        assert isinstance(data, dict)
+        # Alle verdier har gjennomsnitt, min, maks
+        for key, val in data.items():
+            assert 'gjennomsnitt' in val
+            assert 'min' in val
+            assert 'maks' in val
+
+    def test_by_country(self, client):
+        data = assert_json_ok(client.get("/api/salary/by-country"))
+        assert isinstance(data, dict)
+
+    def test_by_age(self, client):
+        data = assert_json_ok(client.get("/api/salary/by-age"))
+        assert isinstance(data, dict)
+
+    def test_by_job_family(self, client):
+        data = assert_json_ok(client.get("/api/salary/by-job-family"))
+        assert isinstance(data, dict)
+
+    @pytest.mark.parametrize("endpoint", [
+        "/api/salary/summary",
+        "/api/salary/by-gender",
+        "/api/salary/by-department",
+        "/api/salary/by-country",
+        "/api/salary/by-age",
+        "/api/salary/by-job-family",
+    ])
+    def test_salary_active_only_false(self, client, endpoint):
+        """Alle lønnsendepunkter aksepterer active_only=false."""
+        data = assert_json_ok(client.get(f"{endpoint}?active_only=false"))
+        assert isinstance(data, dict)
+
 
 # ===========================================================================
 # IMPORT
@@ -342,7 +375,7 @@ class TestStatus:
         data = assert_json_ok(client.get("/api/status"))
         assert "totalt_ansatte" in data
         assert "aktive_ansatte" in data
-        assert data["totalt_ansatte"] == 10
+        assert data["aktive_ansatte"] == 8
 
 
 # ===========================================================================
@@ -641,15 +674,203 @@ class TestAnalyze:
         ))
         assert len(data["data"]) > 0
 
+    def test_analyze_group_by_divisjon(self, client):
+        """Gruppering per divisjon fungerer."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=divisjon"
+        ))
+        assert "Økonomi" in data["data"]
+        assert "Teknologi" in data["data"]
+        assert data["meta"]["group_by_label"] == "Divisjon"
+
+    def test_analyze_group_by_rolle(self, client):
+        """Gruppering per rolle fungerer."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=rolle"
+        ))
+        assert "Regnskapsfører" in data["data"]
+        assert data["meta"]["group_by_label"] == "Rolle"
+
+    def test_analyze_filter_divisjon(self, client):
+        """Filter på divisjon fungerer."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=alle&filter_divisjon=Teknologi"
+        ))
+        # Teknologi: Erik, Morten, Vidar (alle aktive)
+        assert data["data"]["Alle"] == 3
+
+    def test_analyze_filter_rolle(self, client):
+        """Filter på rolle fungerer."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=alle&filter_rolle=Leder"
+        ))
+        # Aktive ledere: Kari, Lars
+        assert data["data"]["Alle"] == 2
+
+    def test_analyze_options_includes_divisjon_rolle(self, client):
+        """Options-endepunkt inkluderer divisjon og rolle."""
+        data = assert_json_ok(client.get("/api/analyze/options"))
+        dim_ids = [d["id"] for d in data["dimensions"]]
+        filter_dim_ids = [d["id"] for d in data["filter_dimensions"]]
+        assert "divisjon" in dim_ids
+        assert "rolle" in dim_ids
+        assert "divisjon" in filter_dim_ids
+        assert "rolle" in filter_dim_ids
+        assert "divisjon" in data["filter_values"]
+        assert "rolle" in data["filter_values"]
+
+    # ----- date_as_of snapshot tests -----
+
+    def test_analyze_date_as_of_snapshot(self, client):
+        """Snapshot per 2025-01-01: Lise (sluttet 2024-12-31) er ekskludert, Per (slutter 2025-06-30) er med."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=alle&date_as_of=2025-01-01"
+        ))
+        # 10 total minus Lise = 9
+        assert data["data"]["Alle"] == 9
+        assert data["meta"]["date_as_of"] == "2025-01-01"
+
+    def test_analyze_date_as_of_excludes_not_yet_started(self, client):
+        """Snapshot per 2020-06-01: bare ansatte startet før/på denne datoen."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=alle&date_as_of=2020-06-01"
+        ))
+        # Started on or before 2020-06-01 with end NULL or end > 2020-06-01:
+        # Ola (2020-01-01), Kari (2018-06-01), Erik (2015-03-15),
+        # Lars (2019-08-01), Per (2017-01-15), Lise (2020-03-01), Vidar (2010-01-01)
+        # Sofia started 2021-02-01 → NOT included, Anna 2022-01-10 → NOT, Morten 2024-06-01 → NOT
+        assert data["data"]["Alle"] == 7
+
+    def test_analyze_date_as_of_with_filter(self, client):
+        """Snapshot med filter fungerer sammen."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=avdeling&date_as_of=2025-01-01"
+            "&filter_arbeidsland=Norge"
+        ))
+        # Norge-ansatte per 2025-01-01: Ola, Kari, Erik, Per, Morten, Vidar = 6
+        # (Lise er dansk og sluttet, men er DK uansett)
+        total = sum(data["data"].values())
+        assert total == 6
+
+    def test_analyze_date_as_of_avg_tenure(self, client):
+        """avg_tenure med date_as_of bruker snapshot-datoen for beregning."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=avg_tenure&group_by=alle&date_as_of=2025-01-01"
+        ))
+        # Skal returnere et tall > 0
+        assert data["data"]["Alle"] > 0
+        assert data["meta"]["date_as_of"] == "2025-01-01"
+
+    def test_analyze_date_as_of_invalid_format(self, client):
+        """Ugyldig datoformat gir 400."""
+        resp = client.get(
+            "/api/analyze?metric=count&group_by=alle&date_as_of=01-01-2025"
+        )
+        assert resp.status_code == 400
+
+    def test_analyze_date_as_of_options(self, client):
+        """Filter-options med date_as_of returnerer verdier for aktive per snapshot."""
+        data = assert_json_ok(client.get(
+            "/api/analyze/options?date_as_of=2020-06-01"
+        ))
+        # Skal ha filter_values med arbeidsland osv.
+        assert "filter_values" in data
+        # Per 2020-06-01: ingen svenske (Sofia startet 2021-02-01)
+        arbeidsland_vals = data["filter_values"].get("arbeidsland", [])
+        assert "Sverige" not in arbeidsland_vals
+        assert "Norge" in arbeidsland_vals
+
+
+class TestMultiSelectFilters:
+    """Tester for multi-select filtre (kommaseparerte verdier)."""
+
+    def test_multi_value_single_dimension(self, client):
+        """Flervalg på én dimensjon: filter_arbeidsland=Norge,Danmark."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=arbeidsland&filter_arbeidsland=Norge,Danmark"
+        ))
+        # Kun Norge og Danmark skal være i resultatet
+        assert set(data["data"].keys()) <= {"Norge", "Danmark"}
+        assert "Sverige" not in data["data"]
+        # Skal finne ansatte i begge land
+        total = sum(data["data"].values())
+        assert total > 0
+
+    def test_multi_value_two_countries(self, client):
+        """Flervalg: Norge+Sverige — teller aktive ansatte."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=arbeidsland&filter_arbeidsland=Norge,Sverige"
+        ))
+        assert "Norge" in data["data"]
+        assert "Sverige" in data["data"]
+        assert "Danmark" not in data["data"]
+
+    def test_multi_value_multiple_dimensions(self, client):
+        """Filtre på to dimensjoner samtidig (AND-logikk mellom dimensjoner)."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=avdeling"
+            "&filter_arbeidsland=Norge&filter_kjonn=Mann"
+        ))
+        # Bare norske menn — summen skal være > 0
+        total = sum(data["data"].values())
+        assert total > 0
+        # Norske menn i testdata: Ola (Regnskap), Erik (IT), Morten (IT), Vidar (IT)
+        assert total <= 4
+
+    def test_multi_value_with_split_by(self, client):
+        """Flervalg-filter med split_by fungerer."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=avdeling&split_by=kjonn"
+            "&filter_arbeidsland=Norge,Danmark"
+        ))
+        # Bør ha nested data
+        for group, splits in data["data"].items():
+            assert isinstance(splits, dict)
+
+    def test_single_value_still_works(self, client):
+        """Enkeltverdi-filter (uten komma) fungerer fortsatt."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=avdeling&filter_arbeidsland=Norge"
+        ))
+        total = sum(data["data"].values())
+        assert total > 0
+
+    def test_multi_value_with_date_as_of(self, client):
+        """Flervalg-filter med date_as_of snapshot."""
+        data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=arbeidsland"
+            "&filter_arbeidsland=Norge,Danmark&date_as_of=2024-06-01"
+        ))
+        # Per 2024-06-01: Lise (DK) er fortsatt aktiv, Per (NO) er aktiv
+        total = sum(data["data"].values())
+        assert total > 0
+
+    def test_multi_value_count_accuracy(self, client):
+        """Verifier eksakt telling med flervalg-filter."""
+        # Bare Norge, aktive
+        no_data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=alle&filter_arbeidsland=Norge"
+        ))
+        # Bare Danmark, aktive
+        dk_data = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=alle&filter_arbeidsland=Danmark"
+        ))
+        # Norge + Danmark kombinerert
+        combined = assert_json_ok(client.get(
+            "/api/analyze?metric=count&group_by=alle&filter_arbeidsland=Norge,Danmark"
+        ))
+        no_count = list(no_data["data"].values())[0]
+        dk_count = list(dk_data["data"].values())[0]
+        combined_count = list(combined["data"].values())[0]
+        assert combined_count == no_count + dk_count
+
 
 class TestActiveOnlyParam:
     """Verifiser at active_only-parameteren fungerer på tvers av endepunkter."""
 
     @pytest.mark.parametrize("endpoint", [
-        pytest.param("/api/tenure/average", marks=pytest.mark.xfail(
-            reason="Kjent WHERE-bug i average_tenure(active_only=False)")),
-        pytest.param("/api/tenure/distribution", marks=pytest.mark.xfail(
-            reason="Kjent WHERE-bug i tenure_distribution(active_only=False)")),
+        "/api/tenure/average",
+        "/api/tenure/distribution",
         "/api/employment/types",
         "/api/employment/fulltime-parttime",
         "/api/management/ratio",

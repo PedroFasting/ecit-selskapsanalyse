@@ -2,6 +2,7 @@
 API-ruter for dashboard-system: brukere, autentisering, profiler og pins.
 """
 
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -21,6 +22,12 @@ class UserCreate(BaseModel):
     navn: str
     epost: str
     rolle: str = "bruker"
+
+
+class UserUpdate(BaseModel):
+    navn: Optional[str] = None
+    epost: Optional[str] = None
+    rolle: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -44,8 +51,10 @@ class PinCreate(BaseModel):
     metric: str
     group_by: str
     split_by: Optional[str] = None
-    filter_dim: Optional[str] = None
-    filter_val: Optional[str] = None
+    filter_dim: Optional[str] = None      # Bakoverkompatibel: enkelt-filter
+    filter_val: Optional[str] = None      # Bakoverkompatibel: enkelt-filter
+    filters: Optional[dict] = None        # Nytt: flervalg-filtre som JSON {dim: [val1, val2, ...]}
+    date_as_of: Optional[str] = None
     chart_type: Optional[str] = None
     tittel: str
 
@@ -56,6 +65,19 @@ class PinReorder(BaseModel):
 
 class MigrateLocalPins(BaseModel):
     pins: list[dict]
+
+
+class TemplateCreate(BaseModel):
+    navn: str
+    metric: str
+    group_by: str
+    split_by: Optional[str] = None
+    filters: Optional[dict] = None
+    chart_type: Optional[str] = None
+
+
+class TemplateMigrate(BaseModel):
+    templates: list[dict]
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +159,165 @@ async def create_user(request: Request, body: UserCreate):
         )
         conn.commit()
         return {"id": cursor.lastrowid, "navn": body.navn, "epost": body.epost, "rolle": body.rolle}
+    finally:
+        conn.close()
+
+
+@router.put("/users/{user_id}")
+async def update_user(request: Request, user_id: int, body: UserUpdate):
+    """Oppdater en bruker (kun admin). Kan ikke endre egen rolle."""
+    current = _require_admin(request)
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, navn, epost, rolle FROM brukere WHERE id = ? AND aktiv = 1",
+            (user_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Bruker ikke funnet")
+
+        # Ikke tillat å endre egen rolle
+        if body.rolle is not None and current["id"] == user_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Du kan ikke endre din egen rolle",
+            )
+
+        # Valider rolle
+        if body.rolle is not None and body.rolle not in ("admin", "bruker"):
+            raise HTTPException(status_code=400, detail="Rolle må være 'admin' eller 'bruker'")
+
+        # Sjekk duplikat e-post
+        if body.epost is not None and body.epost != row["epost"]:
+            dup = conn.execute(
+                "SELECT id FROM brukere WHERE epost = ? AND id != ?",
+                (body.epost, user_id),
+            ).fetchone()
+            if dup:
+                raise HTTPException(status_code=409, detail="E-post finnes allerede")
+
+        # Bygg dynamisk UPDATE
+        updates = []
+        params = []
+        if body.navn is not None:
+            if not body.navn.strip():
+                raise HTTPException(status_code=400, detail="Navn kan ikke være tomt")
+            updates.append("navn = ?")
+            params.append(body.navn.strip())
+        if body.epost is not None:
+            if not body.epost.strip():
+                raise HTTPException(status_code=400, detail="E-post kan ikke være tom")
+            updates.append("epost = ?")
+            params.append(body.epost.strip())
+        if body.rolle is not None:
+            updates.append("rolle = ?")
+            params.append(body.rolle)
+
+        if not updates:
+            raise HTTPException(status_code=400, detail="Ingen felt å oppdatere")
+
+        params.append(user_id)
+        conn.execute(f"UPDATE brukere SET {', '.join(updates)} WHERE id = ?", params)
+        conn.commit()
+
+        updated = conn.execute(
+            "SELECT id, navn, epost, rolle FROM brukere WHERE id = ?", (user_id,)
+        ).fetchone()
+        return dict(updated)
+    finally:
+        conn.close()
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(request: Request, user_id: int):
+    """Deaktiver en bruker (kun admin). Kan ikke slette seg selv."""
+    current = _require_admin(request)
+
+    if current["id"] == user_id:
+        raise HTTPException(status_code=400, detail="Du kan ikke slette deg selv")
+
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, navn FROM brukere WHERE id = ? AND aktiv = 1",
+            (user_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Bruker ikke funnet")
+
+        conn.execute("UPDATE brukere SET aktiv = 0 WHERE id = ?", (user_id,))
+        conn.commit()
+        return {"ok": True, "deaktivert": row["navn"]}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Alderskategorier (konfigurerbare)
+# ---------------------------------------------------------------------------
+
+class AgeCategoryItem(BaseModel):
+    min_alder: int
+    maks_alder: int
+    etikett: str
+
+
+class AgeCategoryUpdate(BaseModel):
+    kategorier: list[AgeCategoryItem]
+
+
+@router.get("/age-categories")
+async def list_age_categories():
+    """Hent alle alderskategorier (sortert)."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, min_alder, maks_alder, etikett, sortering "
+            "FROM alderskategorier ORDER BY sortering"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@router.put("/age-categories")
+async def update_age_categories(request: Request, body: AgeCategoryUpdate):
+    """Erstatt alle alderskategorier (kun admin). Validerer at kategoriene ikke overlapper."""
+    _require_admin(request)
+
+    # Validering
+    if not body.kategorier:
+        raise HTTPException(status_code=400, detail="Minst én kategori er påkrevd")
+
+    for cat in body.kategorier:
+        if cat.min_alder < 0 or cat.maks_alder < cat.min_alder:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ugyldig intervall: {cat.min_alder}-{cat.maks_alder}"
+            )
+        if not cat.etikett.strip():
+            raise HTTPException(status_code=400, detail="Etikett kan ikke være tom")
+
+    # Sjekk overlapp (sortert etter min_alder)
+    sorted_cats = sorted(body.kategorier, key=lambda c: c.min_alder)
+    for i in range(1, len(sorted_cats)):
+        if sorted_cats[i].min_alder <= sorted_cats[i - 1].maks_alder:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Kategoriene overlapper: '{sorted_cats[i - 1].etikett}' og '{sorted_cats[i].etikett}'"
+            )
+
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM alderskategorier")
+        for idx, cat in enumerate(sorted_cats):
+            conn.execute(
+                "INSERT INTO alderskategorier (min_alder, maks_alder, etikett, sortering) "
+                "VALUES (?, ?, ?, ?)",
+                (cat.min_alder, cat.maks_alder, cat.etikett.strip(), idx),
+            )
+        conn.commit()
+        return {"ok": True, "antall": len(sorted_cats)}
     finally:
         conn.close()
 
@@ -352,7 +533,7 @@ async def list_pins(request: Request, profile_id: Optional[int] = None):
             # Mine grafer
             rows = conn.execute(
                 "SELECT id, metric, group_by, split_by, filter_dim, filter_val, "
-                "chart_type, tittel, sortering "
+                "filters, date_as_of, chart_type, tittel, sortering "
                 "FROM dashboard_pins WHERE bruker_id = ? AND profil_id IS NULL "
                 "ORDER BY sortering",
                 (user["id"],),
@@ -360,13 +541,28 @@ async def list_pins(request: Request, profile_id: Optional[int] = None):
         else:
             rows = conn.execute(
                 "SELECT id, metric, group_by, split_by, filter_dim, filter_val, "
-                "chart_type, tittel, sortering "
+                "filters, date_as_of, chart_type, tittel, sortering "
                 "FROM dashboard_pins WHERE profil_id = ? "
                 "ORDER BY sortering",
                 (profile_id,),
             ).fetchall()
 
-        return [dict(r) for r in rows]
+        # Parse filters JSON og sørg for bakoverkompatibilitet
+        result = []
+        for r in rows:
+            pin = dict(r)
+            # Parse JSON filters hvis den finnes
+            if pin.get("filters"):
+                try:
+                    pin["filters"] = json.loads(pin["filters"])
+                except (json.JSONDecodeError, TypeError):
+                    pin["filters"] = None
+            # Bakoverkompatibilitet: bygg filters fra filter_dim/filter_val
+            if not pin.get("filters") and pin.get("filter_dim") and pin.get("filter_val"):
+                pin["filters"] = {pin["filter_dim"]: [pin["filter_val"]]}
+            result.append(pin)
+
+        return result
     finally:
         conn.close()
 
@@ -402,17 +598,38 @@ async def create_pin(request: Request, body: PinCreate):
                 raise HTTPException(status_code=404, detail="Profil ikke funnet")
             profil_id = body.profile_id
 
-        # Duplikat-sjekk
+        # Bakoverkompatibilitet: bygg filters fra filter_dim/filter_val hvis filters mangler
+        effective_filters = body.filters
+        if not effective_filters and body.filter_dim and body.filter_val:
+            effective_filters = {body.filter_dim: [body.filter_val]}
+
+        # Serialiser filters til JSON for lagring
+        filters_json = json.dumps(effective_filters, ensure_ascii=False, sort_keys=True) if effective_filters else None
+
+        # Bakoverkompatibilitet: populer filter_dim/filter_val fra filters hvis det er nøyaktig 1 dimensjon med 1 verdi
+        filter_dim = body.filter_dim
+        filter_val = body.filter_val
+        if effective_filters and not filter_dim:
+            dims = list(effective_filters.items())
+            if len(dims) == 1:
+                k, v = dims[0]
+                vals = v if isinstance(v, list) else [v]
+                if len(vals) == 1:
+                    filter_dim = k
+                    filter_val = vals[0]
+
+        # Duplikat-sjekk — bruk filters JSON for sammenligning
         if bruker_id:
             dup = conn.execute(
                 "SELECT id FROM dashboard_pins "
                 "WHERE bruker_id = ? AND profil_id IS NULL "
                 "AND metric = ? AND group_by = ? "
                 "AND COALESCE(split_by, '') = ? "
-                "AND COALESCE(filter_dim, '') = ? "
-                "AND COALESCE(filter_val, '') = ?",
+                "AND COALESCE(filters, '') = ? "
+                "AND COALESCE(date_as_of, '') = ?",
                 (bruker_id, body.metric, body.group_by,
-                 body.split_by or "", body.filter_dim or "", body.filter_val or ""),
+                 body.split_by or "", filters_json or "",
+                 body.date_as_of or ""),
             ).fetchone()
         else:
             dup = conn.execute(
@@ -420,10 +637,11 @@ async def create_pin(request: Request, body: PinCreate):
                 "WHERE profil_id = ? "
                 "AND metric = ? AND group_by = ? "
                 "AND COALESCE(split_by, '') = ? "
-                "AND COALESCE(filter_dim, '') = ? "
-                "AND COALESCE(filter_val, '') = ?",
+                "AND COALESCE(filters, '') = ? "
+                "AND COALESCE(date_as_of, '') = ?",
                 (profil_id, body.metric, body.group_by,
-                 body.split_by or "", body.filter_dim or "", body.filter_val or ""),
+                 body.split_by or "", filters_json or "",
+                 body.date_as_of or ""),
             ).fetchone()
 
         if dup:
@@ -445,10 +663,11 @@ async def create_pin(request: Request, body: PinCreate):
         cursor = conn.execute(
             "INSERT INTO dashboard_pins "
             "(bruker_id, profil_id, metric, group_by, split_by, filter_dim, filter_val, "
-            "chart_type, tittel, sortering) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "filters, date_as_of, chart_type, tittel, sortering) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (bruker_id, profil_id, body.metric, body.group_by,
-             body.split_by, body.filter_dim, body.filter_val,
-             body.chart_type, body.tittel, max_sort + 1),
+             body.split_by, filter_dim, filter_val,
+             filters_json, body.date_as_of, body.chart_type, body.tittel, max_sort + 1),
         )
         conn.commit()
         return {"id": cursor.lastrowid, "tittel": body.tittel}
@@ -524,17 +743,21 @@ async def migrate_local_pins(request: Request, body: MigrateLocalPins):
             if not metric or not group_by:
                 continue
 
-            # Duplikat-sjekk
+            # Håndter både gammelt (filter_dim/filter_val) og nytt (filters) format
+            pin_filters = pin.get("filters")
+            filters_json = json.dumps(pin_filters, ensure_ascii=False, sort_keys=True) if pin_filters else None
+
+            # Duplikat-sjekk — bruk filters JSON for nye, filter_dim/val for gamle
             dup = conn.execute(
                 "SELECT id FROM dashboard_pins "
                 "WHERE bruker_id = ? AND profil_id IS NULL "
                 "AND metric = ? AND group_by = ? "
                 "AND COALESCE(split_by, '') = ? "
-                "AND COALESCE(filter_dim, '') = ? "
-                "AND COALESCE(filter_val, '') = ?",
+                "AND COALESCE(filters, '') = ? "
+                "AND COALESCE(date_as_of, '') = ?",
                 (user["id"], metric, group_by,
-                 pin.get("split_by") or "", pin.get("filter_dim") or "",
-                 pin.get("filter_val") or ""),
+                 pin.get("split_by") or "", filters_json or "",
+                 pin.get("date_as_of") or ""),
             ).fetchone()
 
             if dup:
@@ -543,10 +766,134 @@ async def migrate_local_pins(request: Request, body: MigrateLocalPins):
             conn.execute(
                 "INSERT INTO dashboard_pins "
                 "(bruker_id, metric, group_by, split_by, filter_dim, filter_val, "
-                "chart_type, tittel, sortering) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "filters, date_as_of, chart_type, tittel, sortering) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (user["id"], metric, group_by,
                  pin.get("split_by"), pin.get("filter_dim"), pin.get("filter_val"),
+                 filters_json, pin.get("date_as_of"),
                  pin.get("chart_type"), tittel, idx),
+            )
+            migrated += 1
+
+        conn.commit()
+        return {"migrated": migrated}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Analyse-maler (templates)
+# ---------------------------------------------------------------------------
+
+@router.get("/dashboard/templates")
+async def list_templates(request: Request):
+    """List alle maler for innlogget bruker."""
+    user = _require_user(request)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, navn, metric, group_by, split_by, filters, chart_type, opprettet "
+            "FROM analyse_maler WHERE bruker_id = ? ORDER BY navn",
+            (user["id"],),
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            if d.get("filters"):
+                try:
+                    d["filters"] = json.loads(d["filters"])
+                except (json.JSONDecodeError, TypeError):
+                    d["filters"] = None
+            result.append(d)
+        return result
+    finally:
+        conn.close()
+
+
+@router.post("/dashboard/templates", status_code=201)
+async def create_template(request: Request, body: TemplateCreate):
+    """Opprett eller overskriv en mal."""
+    user = _require_user(request)
+    filters_json = json.dumps(body.filters) if body.filters else None
+
+    conn = get_connection()
+    try:
+        # Sjekk om mal med samme navn finnes — i så fall oppdater
+        existing = conn.execute(
+            "SELECT id FROM analyse_maler WHERE bruker_id = ? AND navn = ?",
+            (user["id"], body.navn),
+        ).fetchone()
+
+        if existing:
+            conn.execute(
+                "UPDATE analyse_maler SET metric=?, group_by=?, split_by=?, "
+                "filters=?, chart_type=? WHERE id=?",
+                (body.metric, body.group_by, body.split_by,
+                 filters_json, body.chart_type, existing["id"]),
+            )
+            conn.commit()
+            return {"id": existing["id"], "navn": body.navn, "updated": True}
+
+        cursor = conn.execute(
+            "INSERT INTO analyse_maler (bruker_id, navn, metric, group_by, split_by, filters, chart_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user["id"], body.navn, body.metric, body.group_by,
+             body.split_by, filters_json, body.chart_type),
+        )
+        conn.commit()
+        return {"id": cursor.lastrowid, "navn": body.navn, "updated": False}
+    finally:
+        conn.close()
+
+
+@router.delete("/dashboard/templates/{template_id}")
+async def delete_template(template_id: int, request: Request):
+    """Slett en mal (kun egen)."""
+    user = _require_user(request)
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id FROM analyse_maler WHERE id = ? AND bruker_id = ?",
+            (template_id, user["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Mal ikke funnet")
+        conn.execute("DELETE FROM analyse_maler WHERE id = ?", (template_id,))
+        conn.commit()
+        return {"deleted": True}
+    finally:
+        conn.close()
+
+
+@router.post("/dashboard/templates/migrate")
+async def migrate_local_templates(request: Request, body: TemplateMigrate):
+    """Migrer maler fra localStorage til server."""
+    user = _require_user(request)
+    conn = get_connection()
+    try:
+        migrated = 0
+        for tmpl in body.templates:
+            navn = tmpl.get("name", "").strip()
+            metric = tmpl.get("metric", "")
+            group_by = tmpl.get("group_by", "")
+            if not navn or not metric or not group_by:
+                continue
+
+            filters_json = json.dumps(tmpl["filters"]) if tmpl.get("filters") else None
+
+            # Hopp over duplikater
+            existing = conn.execute(
+                "SELECT id FROM analyse_maler WHERE bruker_id = ? AND navn = ?",
+                (user["id"], navn),
+            ).fetchone()
+            if existing:
+                continue
+
+            conn.execute(
+                "INSERT INTO analyse_maler (bruker_id, navn, metric, group_by, split_by, filters, chart_type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (user["id"], navn, metric, group_by,
+                 tmpl.get("split_by"), filters_json, tmpl.get("chart_type")),
             )
             migrated += 1
 

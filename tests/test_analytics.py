@@ -36,16 +36,16 @@ class TestEmployeesSummary:
 
     def test_summary_keys(self, analytics):
         summary = analytics.employees_summary()
-        assert "totalt" in summary
         assert "aktive" in summary
+        assert "nye_siste_3_mnd" in summary
         assert "sluttede" in summary
         assert "gjennomsnitt_alder" in summary
 
     def test_summary_counts(self, analytics):
         summary = analytics.employees_summary()
-        assert summary["totalt"] == 10
         assert summary["aktive"] == 8
         assert summary["sluttede"] == 2
+        assert isinstance(summary["nye_siste_3_mnd"], int)
 
     def test_average_age(self, analytics):
         summary = analytics.employees_summary()

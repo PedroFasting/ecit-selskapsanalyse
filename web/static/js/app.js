@@ -164,6 +164,9 @@ async function doLogin() {
         // Migrer localStorage-pins om de finnes
         await migrateLocalPins();
 
+        // Migrer localStorage-maler om de finnes
+        await migrateLocalTemplates();
+
         // Oppdater dashboard hvis vi er på oversikt
         if (tabLoaded['oversikt']) {
             tabLoaded['oversikt'] = false;
@@ -296,7 +299,7 @@ async function loadOversikt() {
         const cards = document.getElementById('overview-cards');
         cards.innerHTML = `
             ${card('Aktive ansatte', summary.aktive)}
-            ${card('Totalt registrert', summary.totalt)}
+            ${card('Nye siste 3 mnd', summary.nye_siste_3_mnd, 'positive')}
             ${card('Sluttede', summary.sluttede, 'negative')}
             ${card('Snitt alder', summary.gjennomsnitt_alder)}
             ${mgmt ? card('Lederandel', mgmt.leder_andel_pct + '%') : ''}
@@ -382,7 +385,9 @@ async function renderDashboardCharts(profileIdStr) {
             split_by: p.split_by || null,
             filter_dim: p.filter_dim || null,
             filter_val: p.filter_val || null,
+            filters: p.filters || null,
             chart_type: p.chart_type || null,
+            date_as_of: p.date_as_of || null,
             title: p.tittel,
         }));
 
@@ -415,10 +420,18 @@ async function renderPinnedCharts(pins, showUnpin = true) {
     grid.className = 'grid-2 pinned-charts-grid';
 
     for (const pin of pins) {
-        // Bygg query-params
+        // Bygg query-params med støtte for multi-filter
         const params = new URLSearchParams({ metric: pin.metric, group_by: pin.group_by });
         if (pin.split_by) params.set('split_by', pin.split_by);
-        if (pin.filter_dim && pin.filter_val) params.set(`filter_${pin.filter_dim}`, pin.filter_val);
+        if (pin.filters && typeof pin.filters === 'object') {
+            for (const [dim, vals] of Object.entries(pin.filters)) {
+                const valList = Array.isArray(vals) ? vals : [vals];
+                params.set(`filter_${dim}`, valList.join(','));
+            }
+        } else if (pin.filter_dim && pin.filter_val) {
+            params.set(`filter_${pin.filter_dim}`, pin.filter_val);
+        }
+        if (pin.date_as_of) params.set('date_as_of', pin.date_as_of);
 
         const canvasId = 'pinned-' + pin.id;
 
@@ -431,6 +444,7 @@ async function renderPinnedCharts(pins, showUnpin = true) {
             : '';
         chartDiv.innerHTML = `
             <div class="chart-header">
+                <span class="drag-handle" title="Dra for å flytte">&#x2630;</span>
                 <h3>${pin.title}</h3>
                 <div class="chart-actions">
                     ${unpinBtn}
@@ -443,11 +457,23 @@ async function renderPinnedCharts(pins, showUnpin = true) {
 
     container.appendChild(grid);
 
+    // Drag-and-drop for rekkefølge
+    if (showUnpin && currentUser) {
+        initPinDragAndDrop(grid);
+    }
     // Hent data og rendre grafer parallelt
     const renderPromises = pins.map(async (pin) => {
         const params = new URLSearchParams({ metric: pin.metric, group_by: pin.group_by });
         if (pin.split_by) params.set('split_by', pin.split_by);
-        if (pin.filter_dim && pin.filter_val) params.set(`filter_${pin.filter_dim}`, pin.filter_val);
+        if (pin.filters && typeof pin.filters === 'object') {
+            for (const [dim, vals] of Object.entries(pin.filters)) {
+                const valList = Array.isArray(vals) ? vals : [vals];
+                params.set(`filter_${dim}`, valList.join(','));
+            }
+        } else if (pin.filter_dim && pin.filter_val) {
+            params.set(`filter_${pin.filter_dim}`, pin.filter_val);
+        }
+        if (pin.date_as_of) params.set('date_as_of', pin.date_as_of);
 
         const canvasId = 'pinned-' + pin.id;
 
@@ -481,6 +507,91 @@ async function renderPinnedCharts(pins, showUnpin = true) {
     });
 
     await Promise.all(renderPromises);
+}
+
+// === DRAG AND DROP FOR PINNED CHARTS ===
+
+let draggedPin = null;
+
+function initPinDragAndDrop(grid) {
+    const items = grid.querySelectorAll('.pinned-chart');
+
+    items.forEach(item => {
+        // Bare start dra fra drag-handle
+        item.addEventListener('dragstart', (e) => {
+            // Sjekk at draget startet fra drag-handle
+            if (!e.target.closest('.drag-handle') && e.target !== item) {
+                e.preventDefault();
+                return;
+            }
+            draggedPin = item;
+            item.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', item.dataset.pinId);
+        });
+
+        item.addEventListener('dragend', () => {
+            item.classList.remove('dragging');
+            grid.querySelectorAll('.pinned-chart').forEach(el => el.classList.remove('drag-over'));
+            draggedPin = null;
+        });
+
+        item.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (draggedPin && item !== draggedPin) {
+                item.classList.add('drag-over');
+            }
+        });
+
+        item.addEventListener('dragleave', () => {
+            item.classList.remove('drag-over');
+        });
+
+        item.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            item.classList.remove('drag-over');
+            if (!draggedPin || item === draggedPin) return;
+
+            // Flytt DOM-element
+            const allItems = [...grid.querySelectorAll('.pinned-chart')];
+            const fromIdx = allItems.indexOf(draggedPin);
+            const toIdx = allItems.indexOf(item);
+
+            if (fromIdx < toIdx) {
+                item.after(draggedPin);
+            } else {
+                item.before(draggedPin);
+            }
+
+            // Lagre ny rekkefølge på server
+            const newOrder = [...grid.querySelectorAll('.pinned-chart')].map(
+                el => parseInt(el.dataset.pinId)
+            );
+            try {
+                await fetch('/api/dashboard/pins/reorder', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pin_ids: newOrder }),
+                });
+            } catch (err) {
+                console.error('Feil ved omorganisering:', err);
+            }
+        });
+
+        // Tillat dra-start kun fra handle
+        const handle = item.querySelector('.drag-handle');
+        if (handle) {
+            handle.addEventListener('mousedown', () => {
+                item.draggable = true;
+            });
+            handle.addEventListener('mouseup', () => {
+                item.draggable = false;
+            });
+        }
+        // Deaktiver standard draggable (aktiveres kun via handle)
+        item.draggable = false;
+    });
 }
 
 // === CHURN ===
@@ -518,7 +629,6 @@ async function loadChurnPeriod() {
     if (summary) {
         const container = document.getElementById('churn-summary-cards');
         container.innerHTML = `
-            ${card('Periode', summary.periode)}
             ${card('Sluttet', summary.antall_sluttet, 'negative')}
             ${card('Nyansatte', summary.antall_nyansatte, 'positive')}
             ${card('Netto endring', summary.netto_endring, summary.netto_endring >= 0 ? 'positive' : 'negative')}
@@ -589,9 +699,17 @@ async function loadTenure() {
 // === LØNN ===
 
 async function loadLonn() {
-    const [summary, byGender] = await Promise.all([
-        fetchData('/api/salary/summary'),
-        fetchData('/api/salary/by-gender'),
+    const includeInactive = document.getElementById('lonn-include-inactive')?.checked;
+    const activeOnly = !includeInactive;
+    const qs = `active_only=${activeOnly}`;
+
+    const [summary, byGender, byDept, byCountry, byAge, byJobFamily] = await Promise.all([
+        fetchData(`/api/salary/summary?${qs}`),
+        fetchData(`/api/salary/by-gender?${qs}`),
+        fetchData(`/api/salary/by-department?${qs}`),
+        fetchData(`/api/salary/by-country?${qs}`),
+        fetchData(`/api/salary/by-age?${qs}`),
+        fetchData(`/api/salary/by-job-family?${qs}`),
     ]);
 
     if (summary && summary.antall_med_lonn > 0) {
@@ -613,6 +731,38 @@ async function loadLonn() {
     } else {
         showNoData('chart-salary-gender');
     }
+
+    if (byDept && Object.keys(byDept).length > 0) {
+        const labels = Object.keys(byDept);
+        const avgs = labels.map(k => byDept[k].gjennomsnitt);
+        renderHorizontalBarChart('chart-salary-dept', labels, avgs);
+    } else {
+        showNoData('chart-salary-dept');
+    }
+
+    if (byCountry && Object.keys(byCountry).length > 0) {
+        const labels = Object.keys(byCountry);
+        const avgs = labels.map(k => byCountry[k].gjennomsnitt);
+        renderBarChart('chart-salary-country', labels, avgs);
+    } else {
+        showNoData('chart-salary-country');
+    }
+
+    if (byAge && Object.keys(byAge).length > 0) {
+        const labels = Object.keys(byAge);
+        const avgs = labels.map(k => byAge[k].gjennomsnitt);
+        renderBarChart('chart-salary-age', labels, avgs);
+    } else {
+        showNoData('chart-salary-age');
+    }
+
+    if (byJobFamily && Object.keys(byJobFamily).length > 0) {
+        const labels = Object.keys(byJobFamily);
+        const avgs = labels.map(k => byJobFamily[k].gjennomsnitt);
+        renderHorizontalBarChart('chart-salary-jobfamily', labels, avgs);
+    } else {
+        showNoData('chart-salary-jobfamily');
+    }
 }
 
 // === SØK ===
@@ -621,6 +771,7 @@ async function loadLonn() {
 
 let analyseOptions = null;  // Cache for /api/analyze/options data
 let analyseChartType = null; // Currently selected chart type (null = auto)
+let lastAnalyseResult = null; // Store last analysis result for table/CSV export
 
 async function loadAnalyse() {
     await loadAnalyseOptions();
@@ -650,12 +801,8 @@ async function loadAnalyseOptions() {
             `<option value="${d.id}">${d.label}</option>`
         ).join('');
 
-    // Populer filter-dimensjon dropdown
-    const filterDimSel = document.getElementById('analyse-filter-dim');
-    filterDimSel.innerHTML = '<option value="">Ingen filter</option>' +
-        analyseOptions.filter_dimensions.map(d =>
-            `<option value="${d.id}">${d.label}</option>`
-        ).join('');
+    // Populer filter-checkbox-paneler
+    buildFilterPanels(analyseOptions.filter_dimensions, analyseOptions.filter_values);
 
     // Reset mal-dropdown når brukeren endrer valg manuelt
     function resetTemplateSelection() {
@@ -665,26 +812,34 @@ async function loadAnalyseOptions() {
     metricSel.addEventListener('change', resetTemplateSelection);
     groupSel.addEventListener('change', resetTemplateSelection);
     splitSel.addEventListener('change', resetTemplateSelection);
-    filterDimSel.addEventListener('change', resetTemplateSelection);
 
-    // Filter-kaskade: velg dimensjon → populer verdi-dropdown
-    filterDimSel.addEventListener('change', () => {
-        const dim = filterDimSel.value;
-        const filterValSel = document.getElementById('analyse-filter-val');
-        if (!dim) {
-            filterValSel.innerHTML = '<option value="">Velg filter først</option>';
-            filterValSel.disabled = true;
-            return;
-        }
-        const values = analyseOptions.filter_values[dim] || [];
-        filterValSel.innerHTML = '<option value="">Alle</option>' +
-            values.map(v => `<option value="${v}">${v}</option>`).join('');
-        filterValSel.disabled = false;
+    // === Dato-modus toggle (Aktive nå / Per dato) ===
+    const dateModeButtons = document.querySelectorAll('.date-mode-btn');
+    const dateLabelEl = document.getElementById('analyse-date-label');
+    const dateInput = document.getElementById('analyse-date-as-of');
+
+    dateModeButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            dateModeButtons.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const mode = btn.dataset.mode;
+            if (mode === 'snapshot') {
+                dateLabelEl.classList.remove('hidden');
+                // Default til i dag hvis tomt
+                if (!dateInput.value) {
+                    dateInput.value = new Date().toISOString().split('T')[0];
+                }
+            } else {
+                dateLabelEl.classList.add('hidden');
+            }
+            resetTemplateSelection();
+        });
     });
+    dateInput.addEventListener('change', resetTemplateSelection);
 
-    // Reset mal-dropdown også ved endring av filterverdi
-    const filterValSel2 = document.getElementById('analyse-filter-val');
-    filterValSel2.addEventListener('change', resetTemplateSelection);
+    // Reset mal-dropdown ved endring i filtre
+    const filtersContainer = document.getElementById('analyse-filters');
+    filtersContainer.addEventListener('change', resetTemplateSelection);
 
     // "Alle"-gruppering: skjul split_by og chart-type pills
     const groupSel2 = document.getElementById('analyse-group-by');
@@ -699,19 +854,151 @@ async function loadAnalyseOptions() {
     });
 }
 
+/**
+ * Bygg checkbox-filterpaneler i #analyse-filters.
+ * Lager ett <details>-panel per filtrerbar dimensjon.
+ */
+function buildFilterPanels(filterDimensions, filterValues) {
+    const container = document.getElementById('analyse-filters');
+    container.innerHTML = '';
+
+    for (const dim of filterDimensions) {
+        const values = filterValues[dim.id] || [];
+        if (values.length === 0) continue;
+
+        const details = document.createElement('details');
+        details.className = 'filter-panel';
+        details.dataset.dim = dim.id;
+
+        const summary = document.createElement('summary');
+        summary.innerHTML = `<span class="filter-panel-label">${dim.label}</span><span class="filter-panel-badge hidden">0</span>`;
+        details.appendChild(summary);
+
+        const body = document.createElement('div');
+        body.className = 'filter-panel-body';
+
+        // Velg alle / Ingen knapper
+        const actions = document.createElement('div');
+        actions.className = 'filter-panel-actions';
+        actions.innerHTML = `<button type="button" class="filter-action-btn" data-action="all">Alle</button><button type="button" class="filter-action-btn" data-action="none">Ingen</button>`;
+        body.appendChild(actions);
+
+        // Checkbox per verdi
+        for (const val of values) {
+            const label = document.createElement('label');
+            label.className = 'filter-checkbox-label';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.className = 'filter-cb';
+            cb.value = val;
+            cb.dataset.dim = dim.id;
+            label.appendChild(cb);
+            label.appendChild(document.createTextNode(' ' + val));
+            body.appendChild(label);
+        }
+
+        details.appendChild(body);
+        container.appendChild(details);
+
+        // Velg alle / Ingen klikk-handling
+        actions.addEventListener('click', (e) => {
+            const action = e.target.dataset.action;
+            if (!action) return;
+            const cbs = body.querySelectorAll('.filter-cb');
+            cbs.forEach(cb => { cb.checked = action === 'all'; });
+            updateFilterBadge(details);
+        });
+
+        // Oppdater badge ved checkbox-endring
+        body.addEventListener('change', () => updateFilterBadge(details));
+    }
+}
+
+/** Oppdater teller-badge på et filter-panel. */
+function updateFilterBadge(detailsEl) {
+    const cbs = detailsEl.querySelectorAll('.filter-cb');
+    const checked = detailsEl.querySelectorAll('.filter-cb:checked');
+    const badge = detailsEl.querySelector('.filter-panel-badge');
+    if (checked.length > 0 && checked.length < cbs.length) {
+        badge.textContent = checked.length;
+        badge.classList.remove('hidden');
+    } else {
+        badge.classList.add('hidden');
+    }
+}
+
+/**
+ * Les aktive filterverdier fra checkbox-paneler.
+ * Returnerer { dim: [val1, val2], ... } — bare dimensjoner med delvis avkryssing.
+ * Alle avkrysset = ingen filter (vis alt), ingen avkrysset = ingen filter.
+ */
+function getActiveFilters() {
+    const filters = {};
+    const panels = document.querySelectorAll('#analyse-filters .filter-panel');
+    for (const panel of panels) {
+        const dim = panel.dataset.dim;
+        const all = panel.querySelectorAll('.filter-cb');
+        const checked = panel.querySelectorAll('.filter-cb:checked');
+        // Bare filtrer når delvis avkrysset (ikke alle, ikke ingen)
+        if (checked.length > 0 && checked.length < all.length) {
+            filters[dim] = Array.from(checked).map(cb => cb.value);
+        }
+    }
+    return filters;
+}
+
+/**
+ * Sett checkbox-tilstander programmatisk fra et filter-objekt.
+ * Brukes av loadTemplate() og eventuelt pin-gjenoppbygging.
+ */
+function setActiveFilters(filters) {
+    // Fjern alle avkryssinger først
+    document.querySelectorAll('#analyse-filters .filter-cb').forEach(cb => { cb.checked = false; });
+
+    if (!filters || Object.keys(filters).length === 0) return;
+
+    for (const [dim, vals] of Object.entries(filters)) {
+        const valList = Array.isArray(vals) ? vals : [vals];
+        const panel = document.querySelector(`#analyse-filters .filter-panel[data-dim="${dim}"]`);
+        if (!panel) continue;
+        for (const val of valList) {
+            const cb = panel.querySelector(`.filter-cb[value="${CSS.escape(val)}"]`);
+            if (cb) cb.checked = true;
+        }
+        updateFilterBadge(panel);
+
+        // Åpne panelet hvis det har aktive filter
+        if (valList.length > 0) panel.open = true;
+    }
+}
+
 async function runAnalysis() {
     const metric = document.getElementById('analyse-metric').value;
     const groupBy = document.getElementById('analyse-group-by').value;
     const splitBy = document.getElementById('analyse-split-by').value;
-    const filterDim = document.getElementById('analyse-filter-dim').value;
-    const filterVal = document.getElementById('analyse-filter-val').value;
+
+    // Multi-select filtre fra checkbox-paneler
+    const filters = getActiveFilters();
+
+    // Dato-snapshot
+    const dateMode = document.querySelector('.date-mode-btn.active')?.dataset.mode || 'now';
+    const dateAsOf = dateMode === 'snapshot'
+        ? document.getElementById('analyse-date-as-of').value
+        : '';
 
     if (!metric || !groupBy) return;
+    if (dateMode === 'snapshot' && !dateAsOf) {
+        showToast('Velg en dato for snapshot', true);
+        return;
+    }
 
     // Bygg query-params
     const params = new URLSearchParams({ metric, group_by: groupBy });
     if (splitBy && groupBy !== 'alle') params.set('split_by', splitBy);
-    if (filterDim && filterVal) params.set(`filter_${filterDim}`, filterVal);
+    for (const [dim, vals] of Object.entries(filters)) {
+        params.set(`filter_${dim}`, vals.join(','));
+    }
+    if (dateAsOf) params.set('date_as_of', dateAsOf);
 
     const result = await fetchData(`/api/analyze?${params.toString()}`);
     if (!result || !result.data) return;
@@ -719,15 +1006,24 @@ async function runAnalysis() {
     const hasSplitBy = !!splitBy && groupBy !== 'alle';
     const data = result.data;
 
+    // Lagre siste resultat for tabell/CSV
+    lastAnalyseResult = { data, meta: result.meta, hasSplitBy };
+
     // Bygg tittel
     let title = result.meta.metric_label;
     if (groupBy !== 'alle') {
         title += ' per ' + result.meta.group_by_label;
         if (hasSplitBy) title += ' og ' + result.meta.split_by_label;
     }
-    if (filterDim && filterVal) {
-        const dimLabel = analyseOptions.filter_dimensions.find(d => d.id === filterDim)?.label || filterDim;
-        title += ` (${dimLabel}: ${filterVal})`;
+    if (Object.keys(filters).length > 0) {
+        const filterParts = Object.entries(filters).map(([dim, vals]) => {
+            const dimLabel = analyseOptions.filter_dimensions.find(d => d.id === dim)?.label || dim;
+            return `${dimLabel}: ${vals.join(', ')}`;
+        });
+        title += ` (${filterParts.join('; ')})`;
+    }
+    if (dateAsOf) {
+        title += ` \u2014 per ${dateAsOf}`;
     }
 
     // Vis resultat-container
@@ -758,10 +1054,13 @@ async function runAnalysis() {
             <div class="chart-header">
                 <h3 id="analyse-chart-title">${title}</h3>
                 <div class="chart-actions">
+                    <button class="btn-chart-action" id="btn-toggle-table" title="Vis/skjul tabell" onclick="toggleAnalyseTable()">&#x1F4CA;</button>
+                    <button class="btn-chart-action" id="btn-csv-export" title="Last ned CSV" onclick="exportAnalyseCSV()">&#x1F4E5;</button>
                     <button class="btn-chart-action" id="btn-pin-analyse" title="Fest til oversikt" onclick="showPinModal()">&#x1F4CC;</button>
                 </div>
             </div>
             <canvas id="chart-analyse"></canvas>
+            <div id="analyse-data-table" class="analyse-data-table hidden"></div>
         `;
     } else {
         // Oppdater tittel i eksisterende header
@@ -818,6 +1117,9 @@ function updateChartTypePills(suggestion, hasSplitBy) {
 
 function renderAnalyseChart(chartType, data, hasSplitBy, meta) {
     renderChartByType('chart-analyse', chartType, data, hasSplitBy);
+    // Skjul tabell ved ny rendering
+    const tableEl = document.getElementById('analyse-data-table');
+    if (tableEl) tableEl.classList.add('hidden');
 }
 
 // === PIN MODAL & API-BASED PINS ===
@@ -894,21 +1196,37 @@ async function confirmPin() {
     const metric = document.getElementById('analyse-metric').value;
     const groupBy = document.getElementById('analyse-group-by').value;
     const splitBy = document.getElementById('analyse-split-by').value;
-    const filterDim = document.getElementById('analyse-filter-dim').value;
-    const filterVal = document.getElementById('analyse-filter-val').value;
+    const filters = getActiveFilters();
     const title = document.getElementById('analyse-chart-title')?.textContent || 'Ukjent';
     const profileSelect = document.getElementById('pin-profile-select');
     const profileIdStr = profileSelect.value;
     const profileName = profileSelect.options[profileSelect.selectedIndex]?.text || 'Mine grafer';
 
+    // Dato-snapshot
+    const dateMode = document.querySelector('.date-mode-btn.active')?.dataset.mode || 'now';
+    const dateAsOf = dateMode === 'snapshot'
+        ? document.getElementById('analyse-date-as-of').value
+        : null;
+
     if (!metric || !groupBy) return;
+
+    // Bakoverkompatibilitet: sett filter_dim/filter_val fra filters hvis nøyaktig 1 dimensjon med 1 verdi
+    let filterDim = null;
+    let filterVal = null;
+    const filterEntries = Object.entries(filters);
+    if (filterEntries.length === 1 && filterEntries[0][1].length === 1) {
+        filterDim = filterEntries[0][0];
+        filterVal = filterEntries[0][1][0];
+    }
 
     const body = {
         metric,
         group_by: groupBy,
         split_by: splitBy || null,
-        filter_dim: filterDim || null,
-        filter_val: filterVal || null,
+        filter_dim: filterDim,
+        filter_val: filterVal,
+        filters: Object.keys(filters).length > 0 ? filters : null,
+        date_as_of: dateAsOf || null,
         chart_type: analyseChartType || null,
         tittel: title,
     };
@@ -1043,26 +1361,138 @@ function renderChartByType(canvasId, chartType, data, hasSplitBy) {
     }
 }
 
-// === ANALYSE TEMPLATES (localStorage) ===
+// === ANALYSE DATA TABLE + CSV EXPORT ===
+
+/**
+ * Bygg HTML-tabell fra analysedata.
+ * Håndterer både enkel data ({gruppe: verdi}) og split-data ({gruppe: {split: verdi}}).
+ */
+function buildAnalyseTable(data, meta, hasSplitBy) {
+    const groupLabel = meta.group_by_label || 'Gruppe';
+    const metricLabel = meta.metric_label || 'Verdi';
+
+    if (hasSplitBy) {
+        const splitLabel = meta.split_by_label || 'Inndeling';
+        const groups = Object.keys(data);
+        const allSplits = new Set();
+        groups.forEach(g => Object.keys(data[g]).forEach(s => allSplits.add(s)));
+        const splits = [...allSplits];
+
+        let html = '<table><thead><tr>';
+        html += `<th>${groupLabel}</th>`;
+        splits.forEach(s => { html += `<th>${s}</th>`; });
+        html += '</tr></thead><tbody>';
+
+        groups.forEach(g => {
+            html += `<tr><td>${g}</td>`;
+            splits.forEach(s => {
+                const val = data[g][s];
+                html += `<td>${val != null ? formatNumber(val) : '–'}</td>`;
+            });
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        return html;
+    } else {
+        let html = `<table><thead><tr><th>${groupLabel}</th><th>${metricLabel}</th></tr></thead><tbody>`;
+        for (const [key, val] of Object.entries(data)) {
+            html += `<tr><td>${key}</td><td>${formatNumber(val)}</td></tr>`;
+        }
+        html += '</tbody></table>';
+        return html;
+    }
+}
+
+/**
+ * Vis/skjul datatabell under grafen.
+ */
+function toggleAnalyseTable() {
+    if (!lastAnalyseResult) return;
+    const tableEl = document.getElementById('analyse-data-table');
+    if (!tableEl) return;
+
+    if (tableEl.classList.contains('hidden')) {
+        tableEl.innerHTML = buildAnalyseTable(
+            lastAnalyseResult.data,
+            lastAnalyseResult.meta,
+            lastAnalyseResult.hasSplitBy
+        );
+        tableEl.classList.remove('hidden');
+    } else {
+        tableEl.classList.add('hidden');
+    }
+}
+
+/**
+ * Eksporter analysedata som CSV og trigger nedlasting.
+ */
+function exportAnalyseCSV() {
+    if (!lastAnalyseResult) return;
+    const { data, meta, hasSplitBy } = lastAnalyseResult;
+
+    const SEP = ';';
+    const rows = [];
+
+    if (hasSplitBy) {
+        const groups = Object.keys(data);
+        const allSplits = new Set();
+        groups.forEach(g => Object.keys(data[g]).forEach(s => allSplits.add(s)));
+        const splits = [...allSplits];
+
+        // Header
+        rows.push([meta.group_by_label || 'Gruppe', ...splits].join(SEP));
+        // Data rows
+        groups.forEach(g => {
+            const vals = splits.map(s => data[g][s] != null ? data[g][s] : '');
+            rows.push([g, ...vals].join(SEP));
+        });
+    } else {
+        // Header
+        rows.push([meta.group_by_label || 'Gruppe', meta.metric_label || 'Verdi'].join(SEP));
+        // Data rows
+        for (const [key, val] of Object.entries(data)) {
+            rows.push([key, val].join(SEP));
+        }
+    }
+
+    // BOM for Excel-kompatibilitet med norske tegn
+    const BOM = '\uFEFF';
+    const csvContent = BOM + rows.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `analyse-${meta.metric}-${meta.group_by}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+
+// === ANALYSE TEMPLATES (server-lagret, med localStorage-fallback) ===
 
 const TEMPLATE_KEY = 'analysis_templates';
 
-function getTemplates() {
+async function getTemplates() {
+    // Forsøk server først (krever innlogging)
+    if (currentUser) {
+        try {
+            const res = await fetch('/api/dashboard/templates');
+            if (res.ok) return await res.json();
+        } catch { /* fall through to localStorage */ }
+    }
+    // Fallback til localStorage
     try {
         return JSON.parse(localStorage.getItem(TEMPLATE_KEY) || '[]');
     } catch { return []; }
 }
 
-function saveTemplates(templates) {
-    localStorage.setItem(TEMPLATE_KEY, JSON.stringify(templates));
-}
-
-function saveTemplate() {
+async function saveTemplate() {
     const metric = document.getElementById('analyse-metric').value;
     const groupBy = document.getElementById('analyse-group-by').value;
     const splitBy = document.getElementById('analyse-split-by').value;
-    const filterDim = document.getElementById('analyse-filter-dim').value;
-    const filterVal = document.getElementById('analyse-filter-val').value;
+    const filters = getActiveFilters();
 
     if (!metric || !groupBy) {
         alert('Velg metrikk og gruppering først.');
@@ -1072,37 +1502,59 @@ function saveTemplate() {
     const name = prompt('Navn på malen:');
     if (!name || !name.trim()) return;
 
-    const templates = getTemplates();
+    const body = {
+        navn: name.trim(),
+        metric,
+        group_by: groupBy,
+        split_by: splitBy || null,
+        filters: Object.keys(filters).length > 0 ? filters : null,
+        chart_type: analyseChartType,
+    };
 
-    // Sjekk duplikat-navn
+    if (currentUser) {
+        try {
+            const res = await fetch('/api/dashboard/templates', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            if (res.ok) {
+                const result = await res.json();
+                showToast(result.updated ? `Mal «${name.trim()}» oppdatert` : `Mal «${name.trim()}» lagret`);
+                await refreshTemplateDropdown();
+                return;
+            }
+        } catch { /* fall through to localStorage */ }
+    }
+
+    // Fallback: localStorage
+    const templates = JSON.parse(localStorage.getItem(TEMPLATE_KEY) || '[]');
     if (templates.some(t => t.name === name.trim())) {
         if (!confirm(`Malen "${name.trim()}" finnes allerede. Overskriv?`)) return;
         const idx = templates.findIndex(t => t.name === name.trim());
         templates.splice(idx, 1);
     }
-
     templates.push({
         name: name.trim(),
         metric,
         group_by: groupBy,
         split_by: splitBy || null,
-        filter_dim: filterDim || null,
-        filter_val: filterVal || null,
+        filters: Object.keys(filters).length > 0 ? filters : null,
         chart_type: analyseChartType,
         created: new Date().toISOString(),
     });
-
-    saveTemplates(templates);
-    refreshTemplateDropdown();
+    localStorage.setItem(TEMPLATE_KEY, JSON.stringify(templates));
+    await refreshTemplateDropdown();
 }
 
-function loadTemplate() {
+async function loadTemplate() {
     const sel = document.getElementById('analyse-template-list');
-    const name = sel.value;
-    if (!name) return;
+    const selectedValue = sel.value;
+    if (!selectedValue) return;
 
-    const templates = getTemplates();
-    const tmpl = templates.find(t => t.name === name);
+    const templates = await getTemplates();
+    // Matche på id (server) eller name (localStorage)
+    const tmpl = templates.find(t => String(t.id) === selectedValue || t.name === selectedValue || t.navn === selectedValue);
     if (!tmpl) return;
 
     // Sett dropdown-verdier
@@ -1110,20 +1562,16 @@ function loadTemplate() {
     document.getElementById('analyse-group-by').value = tmpl.group_by;
     document.getElementById('analyse-split-by').value = tmpl.split_by || '';
 
-    // Sett filter
-    const filterDimSel = document.getElementById('analyse-filter-dim');
-    filterDimSel.value = tmpl.filter_dim || '';
-    filterDimSel.dispatchEvent(new Event('change')); // Trigger kaskade
-
-    if (tmpl.filter_dim && tmpl.filter_val) {
-        // Vent litt på at kaskade-oppdatering kjører
-        setTimeout(() => {
-            document.getElementById('analyse-filter-val').value = tmpl.filter_val;
-        }, 50);
+    // Sett filtre
+    if (tmpl.filters) {
+        setActiveFilters(tmpl.filters);
+    } else {
+        setActiveFilters({});
     }
 
     // Åpne "Flere valg" om malen har inndeling eller filter
-    if (tmpl.split_by || tmpl.filter_dim) {
+    const hasFilters = tmpl.filters ? Object.keys(tmpl.filters).length > 0 : false;
+    if (tmpl.split_by || hasFilters) {
         document.getElementById('analyse-extra-options').open = true;
     }
 
@@ -1134,28 +1582,76 @@ function loadTemplate() {
     setTimeout(() => runAnalysis(), 100);
 }
 
-function deleteTemplate() {
+async function deleteTemplate() {
     const sel = document.getElementById('analyse-template-list');
-    const name = sel.value;
-    if (!name) return;
+    const selectedValue = sel.value;
+    if (!selectedValue) return;
 
-    if (!confirm(`Slett malen "${name}"?`)) return;
+    const templates = await getTemplates();
+    const tmpl = templates.find(t => String(t.id) === selectedValue || t.name === selectedValue || t.navn === selectedValue);
+    if (!tmpl) return;
 
-    const templates = getTemplates().filter(t => t.name !== name);
-    saveTemplates(templates);
-    refreshTemplateDropdown();
+    const displayName = tmpl.navn || tmpl.name;
+    if (!confirm(`Slett malen "${displayName}"?`)) return;
+
+    if (currentUser && tmpl.id) {
+        try {
+            const res = await fetch(`/api/dashboard/templates/${tmpl.id}`, { method: 'DELETE' });
+            if (res.ok) {
+                showToast(`Mal «${displayName}» slettet`);
+                await refreshTemplateDropdown();
+                return;
+            }
+        } catch { /* fall through */ }
+    }
+
+    // Fallback: localStorage
+    const local = JSON.parse(localStorage.getItem(TEMPLATE_KEY) || '[]');
+    const filtered = local.filter(t => t.name !== (tmpl.name || tmpl.navn));
+    localStorage.setItem(TEMPLATE_KEY, JSON.stringify(filtered));
+    await refreshTemplateDropdown();
 }
 
-function refreshTemplateDropdown() {
+async function refreshTemplateDropdown() {
     const sel = document.getElementById('analyse-template-list');
-    const templates = getTemplates();
+    const templates = await getTemplates();
 
     if (templates.length === 0) {
         sel.innerHTML = '<option value="">Ingen lagrede maler</option>';
     } else {
         sel.innerHTML = '<option value="">Velg mal...</option>' +
-            templates.map(t => `<option value="${t.name}">${t.name}</option>`).join('');
+            templates.map(t => {
+                const value = t.id ? t.id : (t.name || t.navn);
+                const label = t.navn || t.name;
+                return `<option value="${value}">${label}</option>`;
+            }).join('');
     }
+}
+
+/**
+ * Migrer maler fra localStorage til server ved innlogging.
+ */
+async function migrateLocalTemplates() {
+    if (!currentUser) return;
+    const local = JSON.parse(localStorage.getItem(TEMPLATE_KEY) || '[]');
+    if (local.length === 0) return;
+
+    try {
+        const res = await fetch('/api/dashboard/templates/migrate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ templates: local }),
+        });
+        if (res.ok) {
+            const result = await res.json();
+            if (result.migrated > 0) {
+                showToast(`${result.migrated} mal(er) migrert til server`);
+            }
+            // Fjern localStorage-maler etter vellykket migrering
+            localStorage.removeItem(TEMPLATE_KEY);
+            await refreshTemplateDropdown();
+        }
+    } catch { /* ignore migration errors */ }
 }
 
 // === SØK (continued) ===
@@ -1359,7 +1855,7 @@ function card(label, value, type = '') {
 
 async function loadAdmin() {
     if (!currentUser || currentUser.rolle !== 'admin') return;
-    await Promise.all([loadAdminUsers(), loadAdminProfiles()]);
+    await Promise.all([loadAdminUsers(), loadAdminProfiles(), loadAdminAgeCategories()]);
 }
 
 async function loadAdminUsers() {
@@ -1369,18 +1865,23 @@ async function loadAdminUsers() {
         container.innerHTML = '<p style="color:var(--text-light)">Ingen brukere.</p>';
         return;
     }
+    const isSelf = (id) => currentUser && currentUser.id === id;
     container.innerHTML = `
-        <table>
+        <table class="admin-users-table">
             <thead>
-                <tr><th>ID</th><th>Navn</th><th>E-post</th><th>Rolle</th></tr>
+                <tr><th>ID</th><th>Navn</th><th>E-post</th><th>Rolle</th><th></th></tr>
             </thead>
             <tbody>
                 ${users.map(u => `
-                    <tr>
+                    <tr id="user-row-${u.id}">
                         <td>${u.id}</td>
-                        <td>${u.navn}</td>
-                        <td>${u.epost}</td>
-                        <td>${u.rolle}</td>
+                        <td class="user-cell-navn">${u.navn}</td>
+                        <td class="user-cell-epost">${u.epost}</td>
+                        <td class="user-cell-rolle">${u.rolle}</td>
+                        <td class="user-actions">
+                            <button class="btn-admin-edit" onclick="adminEditUser(${u.id}, '${u.navn.replace(/'/g, "\\'")}', '${u.epost.replace(/'/g, "\\'")}', '${u.rolle}')">Rediger</button>
+                            ${isSelf(u.id) ? '' : `<button class="btn-admin-delete" onclick="adminDeleteUser(${u.id}, '${u.navn.replace(/'/g, "\\'")}')">Deaktiver</button>`}
+                        </td>
                     </tr>
                 `).join('')}
             </tbody>
@@ -1416,6 +1917,81 @@ async function adminCreateUser() {
         showToast(`Bruker ${navn} opprettet`);
         document.getElementById('admin-user-name').value = '';
         document.getElementById('admin-user-email').value = '';
+        await loadAdminUsers();
+    } catch (err) {
+        showToast(err.message, true);
+    }
+}
+
+function adminEditUser(id, navn, epost, rolle) {
+    const row = document.getElementById(`user-row-${id}`);
+    if (!row) return;
+    const isSelf = currentUser && currentUser.id === id;
+    row.querySelector('.user-cell-navn').innerHTML =
+        `<input type="text" class="admin-edit-input" id="edit-user-navn-${id}" value="${navn.replace(/"/g, '&quot;')}">`;
+    row.querySelector('.user-cell-epost').innerHTML =
+        `<input type="text" class="admin-edit-input" id="edit-user-epost-${id}" value="${epost.replace(/"/g, '&quot;')}">`;
+    row.querySelector('.user-cell-rolle').innerHTML = isSelf
+        ? `<span>${rolle}</span>`
+        : `<select class="admin-edit-select" id="edit-user-rolle-${id}">
+            <option value="bruker" ${rolle === 'bruker' ? 'selected' : ''}>bruker</option>
+            <option value="admin" ${rolle === 'admin' ? 'selected' : ''}>admin</option>
+           </select>`;
+    row.querySelector('.user-actions').innerHTML =
+        `<button class="btn-admin-save" onclick="adminSaveUser(${id})">Lagre</button>
+         <button class="btn-admin-cancel" onclick="loadAdminUsers()">Avbryt</button>`;
+}
+
+async function adminSaveUser(id) {
+    const navnEl = document.getElementById(`edit-user-navn-${id}`);
+    const epostEl = document.getElementById(`edit-user-epost-${id}`);
+    const rolleEl = document.getElementById(`edit-user-rolle-${id}`);
+
+    const navn = navnEl ? navnEl.value.trim() : undefined;
+    const epost = epostEl ? epostEl.value.trim() : undefined;
+    const rolle = rolleEl ? rolleEl.value : undefined;
+
+    if (navn !== undefined && !navn) {
+        showToast('Navn kan ikke være tomt', true);
+        return;
+    }
+    if (epost !== undefined && !epost) {
+        showToast('E-post kan ikke være tom', true);
+        return;
+    }
+
+    const body = {};
+    if (navn !== undefined) body.navn = navn;
+    if (epost !== undefined) body.epost = epost;
+    if (rolle !== undefined) body.rolle = rolle;
+
+    try {
+        const res = await fetch(`/api/users/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Feil ved oppdatering');
+        }
+        showToast('Bruker oppdatert');
+        await loadAdminUsers();
+    } catch (err) {
+        showToast(err.message, true);
+    }
+}
+
+async function adminDeleteUser(id, navn) {
+    if (!confirm(`Deaktiver brukeren "${navn}"? Brukeren vil ikke kunne logge inn, men data bevares.`)) return;
+
+    try {
+        const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Feil ved deaktivering');
+        }
+        showToast(`Bruker "${navn}" deaktivert`);
         await loadAdminUsers();
     } catch (err) {
         showToast(err.message, true);
@@ -1500,6 +2076,108 @@ async function adminDeleteProfile(profileId, profileName) {
         }
         showToast(`Profil "${profileName}" slettet`);
         await loadAdminProfiles();
+    } catch (err) {
+        showToast(err.message, true);
+    }
+}
+
+// === AGE CATEGORIES ADMIN ===
+
+async function loadAdminAgeCategories() {
+    const container = document.getElementById('admin-age-categories');
+    const data = await fetchData('/api/age-categories');
+    if (!data) {
+        container.innerHTML = '<p style="color:var(--text-light)">Kunne ikke laste alderskategorier.</p>';
+        return;
+    }
+
+    container.innerHTML = `
+        <table class="age-cat-table">
+            <thead>
+                <tr><th>Min alder</th><th>Maks alder</th><th>Etikett</th><th></th></tr>
+            </thead>
+            <tbody id="age-cat-rows">
+                ${data.map((c, i) => ageCategoryRowHtml(c, i)).join('')}
+            </tbody>
+        </table>
+        <div style="display:flex;gap:10px;margin-top:12px;">
+            <button class="btn btn-secondary" onclick="adminAddAgeCategory()">+ Legg til rad</button>
+            <button class="btn btn-primary" onclick="adminSaveAgeCategories()">Lagre kategorier</button>
+        </div>
+    `;
+}
+
+function ageCategoryRowHtml(cat, idx) {
+    return `
+        <tr data-idx="${idx}">
+            <td><input type="number" class="age-cat-min" value="${cat.min_alder}" min="0" max="200"></td>
+            <td><input type="number" class="age-cat-max" value="${cat.maks_alder}" min="0" max="200"></td>
+            <td><input type="text" class="age-cat-label" value="${cat.etikett}"></td>
+            <td><button class="btn-admin-delete" onclick="adminRemoveAgeCategoryRow(this)">Fjern</button></td>
+        </tr>
+    `;
+}
+
+function adminAddAgeCategory() {
+    const tbody = document.getElementById('age-cat-rows');
+    const rows = tbody.querySelectorAll('tr');
+    let nextMin = 0;
+    if (rows.length > 0) {
+        const lastMax = rows[rows.length - 1].querySelector('.age-cat-max');
+        nextMin = parseInt(lastMax.value || '0', 10) + 1;
+    }
+    const idx = rows.length;
+    const tr = document.createElement('tr');
+    tr.dataset.idx = idx;
+    tr.innerHTML = `
+        <td><input type="number" class="age-cat-min" value="${nextMin}" min="0" max="200"></td>
+        <td><input type="number" class="age-cat-max" value="${nextMin + 9}" min="0" max="200"></td>
+        <td><input type="text" class="age-cat-label" value=""></td>
+        <td><button class="btn-admin-delete" onclick="adminRemoveAgeCategoryRow(this)">Fjern</button></td>
+    `;
+    tbody.appendChild(tr);
+}
+
+function adminRemoveAgeCategoryRow(btn) {
+    const tr = btn.closest('tr');
+    tr.remove();
+}
+
+async function adminSaveAgeCategories() {
+    const rows = document.querySelectorAll('#age-cat-rows tr');
+    const kategorier = [];
+    for (const row of rows) {
+        const min_alder = parseInt(row.querySelector('.age-cat-min').value, 10);
+        const maks_alder = parseInt(row.querySelector('.age-cat-max').value, 10);
+        const etikett = row.querySelector('.age-cat-label').value.trim();
+        if (!etikett) {
+            showToast('Alle rader må ha en etikett', true);
+            return;
+        }
+        if (isNaN(min_alder) || isNaN(maks_alder)) {
+            showToast('Alle rader må ha gyldige tall', true);
+            return;
+        }
+        kategorier.push({ min_alder, maks_alder, etikett });
+    }
+
+    if (kategorier.length === 0) {
+        showToast('Minst én kategori er påkrevd', true);
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/age-categories', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kategorier }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Feil ved lagring');
+        }
+        showToast('Alderskategorier lagret');
+        await loadAdminAgeCategories();
     } catch (err) {
         showToast(err.message, true);
     }

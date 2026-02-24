@@ -12,20 +12,40 @@ from statistics import median as _median
 from .database import get_connection, DEFAULT_DB_PATH
 
 
-# Alderskategorier
-AGE_CATEGORIES = [
+# Standard alderskategorier (brukes som fallback hvis DB ikke har data)
+_DEFAULT_AGE_CATEGORIES = [
     (0, 24, 'Under 25'),
     (25, 34, '25-34'),
     (35, 44, '35-44'),
     (45, 54, '45-54'),
     (55, 64, '55-64'),
-    (65, 100, '65+'),
+    (65, 150, '65+'),
 ]
 
 
-def get_age_category(age: int) -> str:
+def load_age_categories(db_path: Optional[Path] = None) -> list[tuple[int, int, str]]:
+    """Last alderskategorier fra databasen, med fallback til standardverdier."""
+    try:
+        conn = get_connection(db_path)
+        rows = conn.execute(
+            "SELECT min_alder, maks_alder, etikett FROM alderskategorier ORDER BY sortering"
+        ).fetchall()
+        conn.close()
+        if rows:
+            return [(r["min_alder"], r["maks_alder"], r["etikett"]) for r in rows]
+    except Exception:
+        pass
+    return list(_DEFAULT_AGE_CATEGORIES)
+
+
+# Bakoverkompatibilitet: AGE_CATEGORIES peker til standardverdier
+AGE_CATEGORIES = _DEFAULT_AGE_CATEGORIES
+
+
+def get_age_category(age: int, categories: list[tuple[int, int, str]] | None = None) -> str:
     """Returner alderskategori for gitt alder."""
-    for min_age, max_age, label in AGE_CATEGORIES:
+    cats = categories or _DEFAULT_AGE_CATEGORIES
+    for min_age, max_age, label in cats:
         if min_age <= age <= max_age:
             return label
     return 'Ukjent'
@@ -36,6 +56,10 @@ class HRAnalytics:
     
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = db_path or DEFAULT_DB_PATH
+    
+    def _age_categories(self) -> list[tuple[int, int, str]]:
+        """Last alderskategorier fra DB (med fallback)."""
+        return load_age_categories(self.db_path)
     
     def _query(self, sql: str, params: tuple = ()) -> list:
         """Kjør SQL-spørring og returner resultater."""
@@ -68,8 +92,11 @@ class HRAnalytics:
     def employees_summary(self) -> Dict:
         """Generell oversikt over ansatte."""
         return {
-            'totalt': self.total_employees(active_only=False),
             'aktive': self.total_employees(active_only=True),
+            'nye_siste_3_mnd': self._query_scalar(
+                "SELECT COUNT(*) FROM ansatte "
+                "WHERE ansettelsens_startdato >= date('now', '-3 months')"
+            ) or 0,
             'sluttede': self._query_scalar(
                 "SELECT COUNT(*) FROM ansatte WHERE er_aktiv = 0"
             ) or 0,
@@ -88,11 +115,12 @@ class HRAnalytics:
         where = "WHERE er_aktiv = 1 AND alder IS NOT NULL" if active_only else "WHERE alder IS NOT NULL"
         rows = self._query(f"SELECT alder FROM ansatte {where}")
         
-        distribution = {cat[2]: 0 for cat in AGE_CATEGORIES}
+        cats = self._age_categories()
+        distribution = {cat[2]: 0 for cat in cats}
         distribution['Ukjent'] = 0
         
         for row in rows:
-            category = get_age_category(row['alder'])
+            category = get_age_category(row['alder'], cats)
             distribution[category] = distribution.get(category, 0) + 1
         
         return distribution
@@ -110,11 +138,12 @@ class HRAnalytics:
         where = "WHERE er_aktiv = 1 AND alder IS NOT NULL" if active_only else "WHERE alder IS NOT NULL"
         rows = self._query(f"SELECT alder, arbeidsland FROM ansatte {where}")
         
-        result = defaultdict(lambda: {cat[2]: 0 for cat in AGE_CATEGORIES})
+        cats = self._age_categories()
+        result = defaultdict(lambda: {cat[2]: 0 for cat in cats})
         
         for row in rows:
             country = row['arbeidsland'] or 'Ukjent land'
-            category = get_age_category(row['alder'])
+            category = get_age_category(row['alder'], cats)
             result[country][category] += 1
         
         return dict(result)
@@ -301,7 +330,10 @@ class HRAnalytics:
     
     def average_tenure(self, active_only: bool = True) -> float:
         """Gjennomsnittlig ansettelsestid i år."""
-        where = "WHERE er_aktiv = 1" if active_only else ""
+        conditions = ["ansettelsens_startdato IS NOT NULL"]
+        if active_only:
+            conditions.append("er_aktiv = 1")
+        where = "WHERE " + " AND ".join(conditions)
         result = self._query_scalar(f"""
             SELECT AVG(
                 JULIANDAY(COALESCE(slutdato_ansettelse, date('now'))) - 
@@ -309,20 +341,21 @@ class HRAnalytics:
             ) / 365.25
             FROM ansatte
             {where}
-            AND ansettelsens_startdato IS NOT NULL
         """)
         return round(result or 0, 1)
     
     def tenure_distribution(self, active_only: bool = True) -> Dict[str, int]:
         """Fordeling av ansettelsestid i kategorier."""
-        where = "WHERE er_aktiv = 1" if active_only else ""
+        conditions = ["ansettelsens_startdato IS NOT NULL"]
+        if active_only:
+            conditions.append("er_aktiv = 1")
+        where = "WHERE " + " AND ".join(conditions)
         rows = self._query(f"""
             SELECT 
                 (JULIANDAY(COALESCE(slutdato_ansettelse, date('now'))) - 
                  JULIANDAY(ansettelsens_startdato)) / 365.25 as tenure
             FROM ansatte
             {where}
-            AND ansettelsens_startdato IS NOT NULL
         """)
         
         categories = {
@@ -494,19 +527,20 @@ class HRAnalytics:
         """, (end_date, start_date))
         
         # Aggreger per alderskategori
+        cats = self._age_categories()
         term_by_cat = defaultdict(int)
         active_by_cat = defaultdict(int)
         
         for row in terminated:
-            cat = get_age_category(row['alder'])
+            cat = get_age_category(row['alder'], cats)
             term_by_cat[cat] += 1
         
         for row in active_by_age:
-            cat = get_age_category(row['alder'])
+            cat = get_age_category(row['alder'], cats)
             active_by_cat[cat] += 1
         
         result = {}
-        for cat in [c[2] for c in AGE_CATEGORIES]:
+        for cat in [c[2] for c in cats]:
             total = active_by_cat[cat]
             sluttet = term_by_cat[cat]
             result[cat] = {
@@ -600,10 +634,11 @@ class HRAnalytics:
             FROM ansatte {where}
         """)
         
+        cats = self._age_categories()
         result = defaultdict(lambda: {
             'total': 0,
             'kjønn': {'Mann': 0, 'Kvinne': 0, 'Ukjent': 0},
-            'alder': {cat[2]: 0 for cat in AGE_CATEGORIES},
+            'alder': {cat[2]: 0 for cat in cats},
             'snitt_alder': []
         })
         
@@ -613,7 +648,7 @@ class HRAnalytics:
             result[land]['kjønn'][row['kjonn']] = result[land]['kjønn'].get(row['kjonn'], 0) + 1
             
             if row['alder']:
-                cat = get_age_category(row['alder'])
+                cat = get_age_category(row['alder'], cats)
                 result[land]['alder'][cat] += 1
                 result[land]['snitt_alder'].append(row['alder'])
         
@@ -680,12 +715,13 @@ class HRAnalytics:
         genders = defaultdict(int)
         age_cats = defaultdict(int)
         depts = defaultdict(int)
+        cats = self._age_categories()
         
         for row in rows:
             if row['kjonn']:
                 genders[row['kjonn']] += 1
             if row['alder']:
-                age_cats[get_age_category(row['alder'])] += 1
+                age_cats[get_age_category(row['alder'], cats)] += 1
             if row['avdeling']:
                 depts[row['avdeling']] += 1
         
@@ -828,9 +864,10 @@ class HRAnalytics:
         
         rows = self._query(f"SELECT alder, lonn FROM ansatte {where}")
         
+        cats = self._age_categories()
         by_category = defaultdict(list)
         for row in rows:
-            cat = get_age_category(row['alder'])
+            cat = get_age_category(row['alder'], cats)
             by_category[cat].append(row['lonn'])
         
         return {

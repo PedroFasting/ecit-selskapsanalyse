@@ -38,3 +38,6 @@ htmlcov/
 
 # Docker
 *.log
+
+# Diverse (bilder, screenshots)
+Diverse/

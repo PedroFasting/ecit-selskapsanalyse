@@ -100,6 +100,22 @@ def _seed_defaults(cursor: sqlite3.Cursor) -> None:
                      pin['tittel'], pin_idx),
                 )
 
+    # Standard alderskategorier
+    cursor.execute("SELECT COUNT(*) FROM alderskategorier")
+    if cursor.fetchone()[0] == 0:
+        for idx, (min_a, maks_a, etikett) in enumerate([
+            (0, 24, 'Under 25'),
+            (25, 34, '25-34'),
+            (35, 44, '35-44'),
+            (45, 54, '45-54'),
+            (55, 64, '55-64'),
+            (65, 150, '65+'),
+        ]):
+            cursor.execute(
+                "INSERT INTO alderskategorier (min_alder, maks_alder, etikett, sortering) VALUES (?, ?, ?, ?)",
+                (min_a, maks_a, etikett, idx),
+            )
+
 
 def init_database(db_path: Optional[Path] = None) -> None:
     """
@@ -166,6 +182,7 @@ def init_database(db_path: Optional[Path] = None) -> None:
         tittel TEXT,
         ledere TEXT,
         avdeling TEXT,
+        divisjon TEXT,
         rolle TEXT,
         jobbfamilie TEXT,
         ansettelsesniva TEXT,
@@ -242,6 +259,8 @@ def init_database(db_path: Optional[Path] = None) -> None:
         split_by TEXT,
         filter_dim TEXT,
         filter_val TEXT,
+        filters TEXT,
+        date_as_of TEXT,
         chart_type TEXT,
         tittel TEXT NOT NULL,
         sortering INTEGER DEFAULT 0,
@@ -252,6 +271,47 @@ def init_database(db_path: Optional[Path] = None) -> None:
 
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_pins_bruker ON dashboard_pins(bruker_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_pins_profil ON dashboard_pins(profil_id)")
+
+    # Analyse-maler (lagrede analyse-konfigurasjoner per bruker)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS analyse_maler (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bruker_id INTEGER NOT NULL REFERENCES brukere(id),
+        navn TEXT NOT NULL,
+        metric TEXT NOT NULL,
+        group_by TEXT NOT NULL,
+        split_by TEXT,
+        filters TEXT,
+        chart_type TEXT,
+        opprettet DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(bruker_id, navn)
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_maler_bruker ON analyse_maler(bruker_id)")
+
+    # Konfigurerbare alderskategorier
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS alderskategorier (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        min_alder INTEGER NOT NULL,
+        maks_alder INTEGER NOT NULL,
+        etikett TEXT NOT NULL,
+        sortering INTEGER NOT NULL DEFAULT 0
+    )
+    """)
+
+    # Legg til nye kolonner i eksisterende databaser (ignorerer feil hvis allerede finnes)
+    for col, coltype in [("date_as_of", "TEXT"), ("filters", "TEXT")]:
+        try:
+            cursor.execute(f"ALTER TABLE dashboard_pins ADD COLUMN {col} {coltype}")
+        except Exception:
+            pass  # Kolonne finnes allerede
+
+    # Legg til divisjon-kolonne i ansatte-tabellen (for eksisterende databaser)
+    try:
+        cursor.execute("ALTER TABLE ansatte ADD COLUMN divisjon TEXT")
+    except Exception:
+        pass  # Kolonne finnes allerede
 
     # Seed standard-profiler og admin-bruker (kun hvis tabellene er tomme)
     _seed_defaults(cursor)

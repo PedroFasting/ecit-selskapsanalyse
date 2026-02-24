@@ -345,6 +345,75 @@ th {
 tr:last-child td { border-bottom: none; }
 tr:hover td { background: var(--beige-light); }
 
+/* === ANALYSE DATA TABLE === */
+.analyse-data-table {
+    margin-top: 16px;
+    max-height: 400px;
+    overflow-y: auto;
+    border-radius: var(--radius);
+}
+.analyse-data-table table {
+    font-variant-numeric: tabular-nums;
+}
+.analyse-data-table td:not(:first-child),
+.analyse-data-table th:not(:first-child) {
+    text-align: right;
+}
+
+/* === PERIOD CONTROLS === */
+.period-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: center;
+}
+.period-picker {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+}
+.period-picker label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-light);
+}
+.period-picker input[type="date"] {
+    padding: 7px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 13px;
+    background: var(--beige-light);
+    color: var(--text);
+    font-family: inherit;
+}
+.period-picker input[type="date"]:focus {
+    outline: none;
+    border-color: var(--navy);
+}
+.period-separator {
+    font-size: 16px;
+    color: var(--text-light);
+    padding-bottom: 6px;
+}
+.toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+}
+.toggle-label input[type="checkbox"] {
+    accent-color: var(--navy);
+    width: 16px;
+    height: 16px;
+}
+
 /* === CONTROLS === */
 .controls {
     display: flex;
@@ -628,15 +697,164 @@ footer a:hover { text-decoration: underline; }
     margin-top: 12px;
 }
 
-/* Inline filter selects */
-.filter-inline {
+/* Multi-select filter panels */
+.analyse-filters-section {
+    margin-top: 12px;
+    padding-top: 8px;
+}
+.analyse-filters-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-light);
+    margin-bottom: 8px;
+}
+.analyse-filters-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.filter-panel {
+    background: var(--beige-light);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    min-width: 140px;
+    max-width: 220px;
+    flex: 0 1 auto;
+}
+.filter-panel[open] {
+    border-color: var(--navy);
+}
+.filter-panel > summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+.filter-panel > summary::-webkit-details-marker { display: none; }
+.filter-panel > summary::before {
+    content: '▸';
+    font-size: 10px;
+    color: var(--text-light);
+    transition: transform 0.15s;
+}
+.filter-panel[open] > summary::before {
+    transform: rotate(90deg);
+}
+.filter-panel-label {
+    flex: 1;
+}
+.filter-panel-badge {
+    background: var(--navy);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    min-width: 18px;
+    height: 18px;
+    line-height: 18px;
+    text-align: center;
+    border-radius: 9px;
+    padding: 0 5px;
+}
+.filter-panel-body {
+    padding: 4px 10px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+.filter-panel-actions {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 4px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+}
+.filter-action-btn {
+    background: none;
+    border: none;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--navy);
+    cursor: pointer;
+    padding: 1px 4px;
+    border-radius: 3px;
+    transition: background 0.15s;
+}
+.filter-action-btn:hover {
+    background: rgba(0,0,0,0.05);
+}
+.filter-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text);
+    padding: 2px 0;
+    cursor: pointer;
+}
+.filter-checkbox-label:hover {
+    color: var(--navy);
+}
+.filter-cb {
+    accent-color: var(--navy);
+    margin: 0;
+}
+
+/* Date mode toggle (Aktive nå / Per dato) */
+.date-mode-label {
     display: flex;
     flex-direction: column;
     gap: 4px;
 }
-.filter-selects {
-    display: flex;
-    gap: 6px;
+.date-mode-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+.date-mode-btn {
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    border: none;
+    background: var(--beige-light);
+    color: var(--text-light);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.date-mode-btn:not(:last-child) {
+    border-right: 1px solid var(--border);
+}
+.date-mode-btn.active {
+    background: var(--navy);
+    color: #fff;
+}
+.date-mode-btn:hover:not(.active) {
+    background: var(--beige);
+}
+#analyse-date-label input[type="date"] {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 13px;
+    background: var(--beige-light);
+    color: var(--text);
+    min-width: 160px;
+    transition: border-color 0.15s;
+}
+#analyse-date-label input[type="date"]:focus {
+    outline: none;
+    border-color: var(--navy);
 }
 
 /* Chart type pills */
@@ -745,6 +963,33 @@ footer a:hover { text-decoration: underline; }
 }
 .pinned-chart {
     position: relative;
+    transition: opacity 0.15s, box-shadow 0.15s;
+}
+.pinned-chart.dragging {
+    opacity: 0.4;
+}
+.pinned-chart.drag-over {
+    box-shadow: 0 0 0 2px var(--navy);
+    border-radius: var(--radius);
+}
+.pinned-chart .drag-handle {
+    cursor: grab;
+    opacity: 0;
+    font-size: 14px;
+    color: var(--text-light);
+    user-select: none;
+    padding: 0 4px;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+}
+.pinned-chart:hover .drag-handle {
+    opacity: 0.6;
+}
+.pinned-chart .drag-handle:hover {
+    opacity: 1;
+}
+.pinned-chart .drag-handle:active {
+    cursor: grabbing;
 }
 .pinned-chart .btn-unpin {
     opacity: 0;
@@ -1010,4 +1255,114 @@ footer a:hover { text-decoration: underline; }
 .btn-admin-delete:hover {
     background: var(--red);
     color: #fff;
+}
+
+/* Age category editor */
+.age-cat-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+.age-cat-table th {
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-light);
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+}
+.age-cat-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+}
+.age-cat-table tr:last-child td {
+    border-bottom: none;
+}
+.age-cat-table input[type="number"],
+.age-cat-table input[type="text"] {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 13px;
+    background: var(--beige-light);
+    color: var(--text);
+    width: 100%;
+}
+.age-cat-table input[type="number"] {
+    max-width: 100px;
+}
+.age-cat-table input:focus {
+    outline: none;
+    border-color: var(--navy);
+}
+
+/* User admin table — edit/save/cancel buttons */
+.admin-users-table .user-actions {
+    display: flex;
+    gap: 6px;
+    white-space: nowrap;
+}
+.btn-admin-edit {
+    background: none;
+    border: 1px solid var(--navy);
+    color: var(--navy);
+    padding: 4px 10px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.15s, color 0.15s;
+}
+.btn-admin-edit:hover {
+    background: var(--navy);
+    color: #fff;
+}
+.btn-admin-save {
+    background: var(--positive);
+    border: 1px solid var(--positive);
+    color: #fff;
+    padding: 4px 10px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: opacity 0.15s;
+}
+.btn-admin-save:hover {
+    opacity: 0.85;
+}
+.btn-admin-cancel {
+    background: none;
+    border: 1px solid var(--text-light);
+    color: var(--text-light);
+    padding: 4px 10px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.15s, color 0.15s;
+}
+.btn-admin-cancel:hover {
+    background: var(--text-light);
+    color: #fff;
+}
+.admin-edit-input,
+.admin-edit-select {
+    padding: 5px 8px;
+    border: 1px solid var(--navy);
+    border-radius: var(--radius);
+    font-size: 13px;
+    background: #fff;
+    color: var(--text);
+    width: 100%;
+    min-width: 100px;
+}
+.admin-edit-input:focus,
+.admin-edit-select:focus {
+    outline: none;
+    border-color: var(--blue-link);
 }

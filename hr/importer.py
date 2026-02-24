@@ -59,6 +59,7 @@ COLUMN_MAPPING = {
     'Tittel': 'tittel',
     'Ledere': 'ledere',
     'Avdeling': 'avdeling',
+    'Divisjon': 'divisjon',
     'Rolle': 'rolle',
     'Jobbfamilie': 'jobbfamilie',
     'Ansettelsenivå': 'ansettelsesniva',

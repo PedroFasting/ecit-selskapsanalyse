@@ -4,12 +4,13 @@ Bygger sikre SQL-spørringer fra forhåndsgodkjente metrikker, dimensjoner og fi
 All bruker-input valideres mot whitelists — ingen rå SQL fra brukeren.
 """
 
-from typing import Optional
+from typing import Optional, Union
 from pathlib import Path
 from collections import defaultdict
 from statistics import median as _median
 
 from .database import get_connection, DEFAULT_DB_PATH
+from .analytics import load_age_categories
 
 
 # === WHITELISTS ===
@@ -45,11 +46,13 @@ METRICS: dict[str, tuple[Optional[str], str]] = {
 # None betyr beregnet felt (spesialhåndtering i _resolve_dimension)
 DIMENSIONS: dict[str, tuple[Optional[str], str]] = {
     "avdeling":          ("avdeling", "Avdeling"),
+    "divisjon":          ("divisjon", "Divisjon"),
     "juridisk_selskap":  ("juridisk_selskap", "Selskap"),
     "arbeidsland":       ("arbeidsland", "Land"),
     "kjonn":             ("kjonn", "Kjønn"),
     "aldersgruppe":      (None, "Aldersgruppe"),
     "jobbfamilie":       ("jobbfamilie", "Jobbfamilie"),
+    "rolle":             ("rolle", "Rolle"),
     "ansettelsetype":    ("ansettelsetype", "Ansettelsestype"),
     "er_leder":          ("er_leder", "Leder/ikke-leder"),
     "kostsenter":        ("kostsenter", "Kostsenter"),
@@ -59,16 +62,23 @@ DIMENSIONS: dict[str, tuple[Optional[str], str]] = {
     "arbeidssted":       ("arbeidssted", "Arbeidssted"),
 }
 
-# SQL CASE-uttrykk for aldersgrupper (beregnet dimensjon)
-AGE_CASE_EXPR = """CASE
-    WHEN alder < 25 THEN 'Under 25'
-    WHEN alder BETWEEN 25 AND 34 THEN '25-34'
-    WHEN alder BETWEEN 35 AND 44 THEN '35-44'
-    WHEN alder BETWEEN 45 AND 54 THEN '45-54'
-    WHEN alder BETWEEN 55 AND 64 THEN '55-64'
-    WHEN alder >= 65 THEN '65+'
-    ELSE 'Ukjent'
-END"""
+# SQL CASE-uttrykk for aldersgrupper (bygges dynamisk fra DB)
+def _build_age_case_expr(db_path: Optional[Path] = None) -> str:
+    """Bygg SQL CASE-uttrykk for aldersgrupper fra DB-kategorier."""
+    cats = load_age_categories(db_path)
+    parts = []
+    for min_a, max_a, label in cats:
+        if min_a == 0:
+            parts.append(f"WHEN alder < {max_a + 1} THEN '{label}'")
+        elif max_a >= 150:
+            parts.append(f"WHEN alder >= {min_a} THEN '{label}'")
+        else:
+            parts.append(f"WHEN alder BETWEEN {min_a} AND {max_a} THEN '{label}'")
+    lines = "\n    ".join(parts)
+    return f"CASE\n    {lines}\n    ELSE 'Ukjent'\nEND"
+
+# Bakoverkompatibilitet: statisk fallback for import
+AGE_CASE_EXPR = _build_age_case_expr()
 
 # SQL CASE-uttrykk for ansiennitetsgrupper (beregnet dimensjon)
 TENURE_CASE_EXPR = """CASE
@@ -86,25 +96,39 @@ FILTERS: dict[str, str] = {
 }
 
 
-def _resolve_dimension(dim_key: str) -> str:
+def _resolve_dimension(dim_key: str, db_path: Optional[Path] = None) -> str:
     """
     Returner SQL-uttrykk for en dimensjon.
     Vanlige kolonner returneres med COALESCE, beregnede dimensjoner med CASE.
     """
     if dim_key == "aldersgruppe":
-        return AGE_CASE_EXPR
+        return _build_age_case_expr(db_path)
     if dim_key == "tenure_gruppe":
         return TENURE_CASE_EXPR
     col = DIMENSIONS[dim_key][0]
     return f"COALESCE({col}, 'Ukjent')"
 
 
+def _validate_date_as_of(date_as_of: Optional[str]) -> Optional[str]:
+    """Valider og normaliser date_as_of parameter (YYYY-MM-DD format)."""
+    if date_as_of is None:
+        return None
+    import re
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_as_of):
+        raise ValueError(
+            f"Ugyldig datoformat: '{date_as_of}'. Bruk YYYY-MM-DD (f.eks. 2025-06-01)."
+        )
+    return date_as_of
+
+
 def build_analysis_query(
     metric: str,
     group_by: str,
     split_by: Optional[str] = None,
-    filters: Optional[dict[str, str]] = None,
+    filters: Optional[dict[str, Union[str, list[str]]]] = None,
     active_only: bool = True,
+    date_as_of: Optional[str] = None,
+    db_path: Optional[Path] = None,
 ) -> tuple[str, tuple]:
     """
     Bygg sikker SQL-spørring fra validerte parametere.
@@ -113,8 +137,11 @@ def build_analysis_query(
         metric: Nøkkel fra METRICS (f.eks. 'count', 'avg_salary')
         group_by: Nøkkel fra DIMENSIONS (f.eks. 'avdeling', 'kjonn')
         split_by: Valgfri ekstra dimensjon fra DIMENSIONS
-        filters: Dict med {dimensjon_nøkkel: verdi} for WHERE-filtre
-        active_only: Bare aktive ansatte
+        filters: Dict med {dimensjon_nøkkel: verdi_eller_liste} for WHERE-filtre.
+                 Enkeltverdi: "Norge" → col = ?
+                 Liste: ["Norge", "Sverige"] → col IN (?, ?)
+        active_only: Bare aktive ansatte (ignoreres hvis date_as_of er satt)
+        date_as_of: Snapshot-dato (YYYY-MM-DD) — vis ansatte som var aktive per denne datoen
 
     Returns:
         (sql_string, params_tuple)
@@ -122,6 +149,9 @@ def build_analysis_query(
     Raises:
         ValueError: Hvis metric, group_by, split_by eller filter-nøkkel er ugyldig
     """
+    # Valider date_as_of
+    date_as_of = _validate_date_as_of(date_as_of)
+
     # Valider metrikk
     if metric not in METRICS:
         raise ValueError(
@@ -144,7 +174,17 @@ def build_analysis_query(
     params: list = []
     where_parts: list[str] = []
 
-    if active_only:
+    # Dato-snapshot: vis ansatte som var aktive per angitt dato
+    # Overstyrer active_only når satt
+    if date_as_of:
+        where_parts.append("ansettelsens_startdato IS NOT NULL")
+        where_parts.append("ansettelsens_startdato <= ?")
+        params.append(date_as_of)
+        where_parts.append(
+            "(slutdato_ansettelse IS NULL OR slutdato_ansettelse > ?)"
+        )
+        params.append(date_as_of)
+    elif active_only:
         where_parts.append("er_aktiv = 1")
 
     # Metrikker som krever lønn trenger lonn IS NOT NULL
@@ -179,11 +219,31 @@ def build_analysis_query(
                     f"Ugyldig filter: '{key}'. Tillatte: {', '.join(FILTERS.keys())}"
                 )
             col = FILTERS[key]
-            where_parts.append(f"{col} = ?")
-            params.append(value)
+            # Støtt både enkeltverdi (str) og flerverdier (list)
+            if isinstance(value, list):
+                if len(value) == 0:
+                    continue  # Tom liste = ingen filtrering
+                if len(value) == 1:
+                    where_parts.append(f"{col} = ?")
+                    params.append(value[0])
+                else:
+                    placeholders = ", ".join(["?"] * len(value))
+                    where_parts.append(f"{col} IN ({placeholders})")
+                    params.extend(value)
+            else:
+                where_parts.append(f"{col} = ?")
+                params.append(value)
 
     # Bygg SQL
     agg_func = METRICS[metric][0]
+
+    # Når date_as_of er satt, bruk snapshot-datoen i stedet for date('now')
+    # for ansiennitetsberegninger
+    if date_as_of and metric == "avg_tenure":
+        agg_func = (
+            f"AVG(JULIANDAY(COALESCE(slutdato_ansettelse, '{date_as_of}')) "
+            f"- JULIANDAY(ansettelsens_startdato)) / 365.25"
+        )
 
     where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
@@ -194,11 +254,11 @@ def build_analysis_query(
             sql = f"SELECT lonn AS verdi FROM ansatte {where_clause}"
             return sql, tuple(params)
 
-        group_expr = _resolve_dimension(group_by)
+        group_expr = _resolve_dimension(group_by, db_path)
         select_parts = [f"{group_expr} AS gruppe"]
 
         if split_by:
-            split_expr = _resolve_dimension(split_by)
+            split_expr = _resolve_dimension(split_by, db_path)
             select_parts.append(f"{split_expr} AS inndeling")
 
         select_parts.append("lonn AS verdi")
@@ -215,14 +275,14 @@ def build_analysis_query(
         sql = f"SELECT {agg_func} AS verdi FROM ansatte {where_clause}"
         return sql, tuple(params)
 
-    group_expr = _resolve_dimension(group_by)
+    group_expr = _resolve_dimension(group_by, db_path)
     group_alias = "gruppe"
 
     select_parts = [f"{group_expr} AS {group_alias}"]
     group_by_parts = [group_alias]
 
     if split_by:
-        split_expr = _resolve_dimension(split_by)
+        split_expr = _resolve_dimension(split_by, db_path)
         split_alias = "inndeling"
         select_parts.append(f"{split_expr} AS {split_alias}")
         group_by_parts.append(split_alias)
@@ -244,8 +304,9 @@ def _compute_special_metric(
     metric: str,
     group_by: str,
     split_by: Optional[str],
-    filters: Optional[dict[str, str]],
+    filters: Optional[dict[str, Union[str, list[str]]]],
     rows: list,
+    date_as_of: Optional[str] = None,
 ) -> dict:
     """
     Beregn metrikker som ikke kan uttrykkes som SQL-aggregat (f.eks. median).
@@ -262,6 +323,7 @@ def _compute_special_metric(
         "split_by": split_by,
         "split_by_label": DIMENSIONS[split_by][1] if split_by else None,
         "filters": filters or {},
+        "date_as_of": date_as_of,
     }
 
     if group_by == "alle":
@@ -312,16 +374,21 @@ def run_analysis(
     metric: str,
     group_by: str,
     split_by: Optional[str] = None,
-    filters: Optional[dict[str, str]] = None,
+    filters: Optional[dict[str, Union[str, list[str]]]] = None,
     active_only: bool = True,
     db_path: Optional[Path] = None,
+    date_as_of: Optional[str] = None,
 ) -> dict:
     """
     Kjør en analyse og returner strukturert resultat.
 
+    Args:
+        date_as_of: Snapshot-dato (YYYY-MM-DD) — vis ansatte som var aktive per denne datoen.
+                    Overstyrer active_only.
+
     Returns:
         {
-            "meta": { metric, metric_label, group_by, group_by_label, ... },
+            "meta": { metric, metric_label, group_by, group_by_label, ..., date_as_of },
             "data": { "Gruppe1": verdi, ... } eller { "Gruppe1": {"Split1": v, ...}, ... }
         }
     """
@@ -331,6 +398,8 @@ def run_analysis(
         split_by=split_by,
         filters=filters,
         active_only=active_only,
+        date_as_of=date_as_of,
+        db_path=db_path,
     )
 
     conn = get_connection(db_path)
@@ -344,7 +413,7 @@ def run_analysis(
     # Spesialhåndtering: metrikker med None som SQL (f.eks. median)
     # Rådataene er hentet per rad — vi grupperer og beregner i Python.
     if agg_func is None:
-        return _compute_special_metric(metric, group_by, split_by, filters, rows)
+        return _compute_special_metric(metric, group_by, split_by, filters, rows, date_as_of)
 
     # Spesialhåndtering: "alle" returnerer én enkelt verdi
     if group_by == "alle":
@@ -357,6 +426,7 @@ def run_analysis(
             "split_by": None,
             "split_by_label": None,
             "filters": filters or {},
+            "date_as_of": date_as_of,
             "total_groups": 1,
         }
         return {"meta": meta, "data": {"Alle": _round_value(value, metric)}}
@@ -370,6 +440,7 @@ def run_analysis(
         "split_by": split_by,
         "split_by_label": DIMENSIONS[split_by][1] if split_by else None,
         "filters": filters or {},
+        "date_as_of": date_as_of,
     }
 
     # Bygg data
@@ -395,25 +466,48 @@ def run_analysis(
 def get_filter_values(
     db_path: Optional[Path] = None,
     active_only: bool = True,
+    date_as_of: Optional[str] = None,
 ) -> dict[str, list[str]]:
     """
     Hent unike verdier for alle filtrerbare dimensjoner.
     Brukes til å populere filter-dropdowns i frontend.
+
+    Args:
+        date_as_of: Snapshot-dato — vis verdier for ansatte aktive per denne datoen.
     """
+    date_as_of = _validate_date_as_of(date_as_of)
     conn = get_connection(db_path)
     cursor = conn.cursor()
 
-    where = "WHERE er_aktiv = 1" if active_only else ""
+    # Bygg WHERE-betingelse
+    if date_as_of:
+        where = (
+            "WHERE ansettelsens_startdato IS NOT NULL "
+            "AND ansettelsens_startdato <= ? "
+            "AND (slutdato_ansettelse IS NULL OR slutdato_ansettelse > ?)"
+        )
+        base_params = [date_as_of, date_as_of]
+    elif active_only:
+        where = "WHERE er_aktiv = 1"
+        base_params = []
+    else:
+        where = ""
+        base_params = []
+
     result: dict[str, list[str]] = {}
 
     for key, col in FILTERS.items():
-        cursor.execute(
-            f"SELECT DISTINCT {col} FROM ansatte {where} "
-            f"AND {col} IS NOT NULL ORDER BY {col}"
-            if where else
-            f"SELECT DISTINCT {col} FROM ansatte "
-            f"WHERE {col} IS NOT NULL ORDER BY {col}"
-        )
+        if where:
+            sql = (
+                f"SELECT DISTINCT {col} FROM ansatte {where} "
+                f"AND {col} IS NOT NULL ORDER BY {col}"
+            )
+        else:
+            sql = (
+                f"SELECT DISTINCT {col} FROM ansatte "
+                f"WHERE {col} IS NOT NULL ORDER BY {col}"
+            )
+        cursor.execute(sql, base_params)
         result[key] = [row[0] for row in cursor.fetchall()]
 
     conn.close()

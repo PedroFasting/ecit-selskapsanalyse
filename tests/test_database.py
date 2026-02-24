@@ -142,3 +142,54 @@ class TestResetDatabase:
 
         assert "ansatte" in tables
         assert "import_logg" in tables
+
+
+class TestAlderskategorierSeed:
+    """Tests for alderskategorier table creation and seed data."""
+
+    def test_creates_alderskategorier_table(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        init_database(db_path)
+        conn = get_connection(db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='alderskategorier'"
+        )
+        assert cursor.fetchone() is not None
+        conn.close()
+
+    def test_seed_creates_default_categories(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        init_database(db_path)
+        conn = get_connection(db_path)
+        rows = conn.execute(
+            "SELECT min_alder, maks_alder, etikett FROM alderskategorier ORDER BY sortering"
+        ).fetchall()
+        conn.close()
+
+        assert len(rows) == 6
+        labels = [r["etikett"] for r in rows]
+        assert labels == ["Under 25", "25-34", "35-44", "45-54", "55-64", "65+"]
+
+    def test_seed_idempotent(self, tmp_path):
+        """Running init_database twice should not duplicate seed data."""
+        db_path = tmp_path / "test.db"
+        init_database(db_path)
+        init_database(db_path)
+        conn = get_connection(db_path)
+        count = conn.execute("SELECT COUNT(*) FROM alderskategorier").fetchone()[0]
+        conn.close()
+        assert count == 6
+
+    def test_seed_boundaries_cover_full_range(self, tmp_path):
+        """Verify default categories start at 0 and end at 150 (65+)."""
+        db_path = tmp_path / "test.db"
+        init_database(db_path)
+        conn = get_connection(db_path)
+        rows = conn.execute(
+            "SELECT min_alder, maks_alder FROM alderskategorier ORDER BY sortering"
+        ).fetchall()
+        conn.close()
+
+        assert rows[0]["min_alder"] == 0
+        assert rows[-1]["maks_alder"] == 150

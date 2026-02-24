@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HR Analyse &mdash; ECIT</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=9">
+    <link rel="stylesheet" href="/static/css/style.css?v=15">
 </head>
 <body>
     <header>
@@ -108,16 +108,19 @@
 
         <!-- CHURN -->
         <section id="tab-churn" class="tab-content">
-            <div class="controls">
-                <label>
-                    Fra:
-                    <input type="date" id="churn-start">
-                </label>
-                <label>
-                    Til:
-                    <input type="date" id="churn-end">
-                </label>
-                <button class="btn btn-secondary" onclick="loadChurnPeriod()">Beregn periode</button>
+            <div class="controls period-controls">
+                <div class="period-picker">
+                    <label>
+                        Fra
+                        <input type="date" id="churn-start">
+                    </label>
+                    <span class="period-separator">&ndash;</span>
+                    <label>
+                        Til
+                        <input type="date" id="churn-end">
+                    </label>
+                </div>
+                <button class="btn btn-primary" onclick="loadChurnPeriod()">Beregn periode</button>
             </div>
             <div id="churn-summary-cards" class="cards"></div>
             <div class="chart-container">
@@ -163,10 +166,34 @@
 
         <!-- L&Oslash;NN -->
         <section id="tab-lonn" class="tab-content">
+            <div class="controls period-controls">
+                <label class="toggle-label">
+                    <input type="checkbox" id="lonn-include-inactive" onchange="loadLonn()">
+                    Inkluder inaktive ansatte
+                </label>
+            </div>
             <div class="cards" id="salary-cards"></div>
-            <div class="chart-container">
-                <h3>L&oslash;nn per kj&oslash;nn (l&oslash;nnsforskjell)</h3>
-                <canvas id="chart-salary-gender"></canvas>
+            <div class="grid-2">
+                <div class="chart-container">
+                    <h3>L&oslash;nn per kj&oslash;nn</h3>
+                    <canvas id="chart-salary-gender"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>L&oslash;nn per avdeling</h3>
+                    <canvas id="chart-salary-dept"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>L&oslash;nn per land</h3>
+                    <canvas id="chart-salary-country"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>L&oslash;nn per aldersgruppe</h3>
+                    <canvas id="chart-salary-age"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>L&oslash;nn per jobbfamilie</h3>
+                    <canvas id="chart-salary-jobfamily"></canvas>
+                </div>
             </div>
         </section>
 
@@ -190,23 +217,31 @@
                 <details id="analyse-extra-options">
                     <summary>Flere valg</summary>
                     <div class="analyse-row analyse-secondary">
+                        <label class="date-mode-label">
+                            Tidsutvalg
+                            <span class="date-mode-toggle">
+                                <button type="button" class="date-mode-btn active" data-mode="now">Aktive n&aring;</button>
+                                <button type="button" class="date-mode-btn" data-mode="snapshot">Per dato</button>
+                            </span>
+                        </label>
+                        <label id="analyse-date-label" class="hidden">
+                            Vis per dato
+                            <input type="date" id="analyse-date-as-of" />
+                        </label>
+                    </div>
+                    <div class="analyse-row analyse-secondary">
                         <label>
                             Ekstra inndeling
                             <select id="analyse-split-by">
                                 <option value="">Ingen</option>
                             </select>
                         </label>
-                        <label class="filter-inline">
-                            Filtrer p&aring;
-                            <span class="filter-selects">
-                                <select id="analyse-filter-dim">
-                                    <option value="">Ingen filter</option>
-                                </select>
-                                <select id="analyse-filter-val" disabled>
-                                    <option value="">Velg filter f&oslash;rst</option>
-                                </select>
-                            </span>
-                        </label>
+                    </div>
+                    <div class="analyse-filters-section">
+                        <span class="analyse-filters-label">Filtrer p&aring;</span>
+                        <div id="analyse-filters" class="analyse-filters-container">
+                            <!-- Checkbox-paneler genereres av JS -->
+                        </div>
                     </div>
                 </details>
 
@@ -235,12 +270,19 @@
                 <div class="chart-header">
                     <h3 id="analyse-chart-title">Resultat</h3>
                     <div class="chart-actions">
+                        <button class="btn-chart-action" id="btn-toggle-table" title="Vis/skjul tabell" onclick="toggleAnalyseTable()">
+                            &#x1F4CA;
+                        </button>
+                        <button class="btn-chart-action" id="btn-csv-export" title="Last ned CSV" onclick="exportAnalyseCSV()">
+                            &#x1F4E5;
+                        </button>
                         <button class="btn-chart-action" id="btn-pin-analyse" title="Fest til oversikt" onclick="showPinModal()">
                             &#x1F4CC;
                         </button>
                     </div>
                 </div>
                 <canvas id="chart-analyse"></canvas>
+                <div id="analyse-data-table" class="analyse-data-table hidden"></div>
             </div>
         </section>
 
@@ -325,6 +367,12 @@
                     <button class="btn btn-primary" onclick="adminCreateProfile()">Opprett</button>
                 </div>
             </div>
+
+            <h2 class="section-title" style="margin-top:32px;">Alderskategorier</h2>
+            <p style="font-size:13px;color:var(--text-light);margin-bottom:12px;">
+                Brukes i aldersfordeling, churn per alder, l&oslash;nn per alder, m.m.
+            </p>
+            <div id="admin-age-categories"></div>
         </section>
 
         <!-- LASTEINDIKATOR -->
@@ -345,7 +393,7 @@
     </footer>
 
     <script src="/static/js/chart.min.js"></script>
-    <script src="/static/js/charts.js?v=8"></script>
-    <script src="/static/js/app.js?v=9"></script>
+    <script src="/static/js/charts.js?v=15"></script>
+    <script src="/static/js/app.js?v=15"></script>
 </body>
 </html>

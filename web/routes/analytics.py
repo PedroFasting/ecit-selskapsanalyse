@@ -152,3 +152,27 @@ async def salary_summary(active_only: bool = Query(True)):
 async def salary_by_gender(active_only: bool = Query(True)):
     """Lønn per kjønn med lønnsgap-beregning."""
     return get_analytics().salary_by_gender(active_only=active_only)
+
+
+@router.get("/salary/by-department")
+async def salary_by_department(active_only: bool = Query(True)):
+    """Lønn per avdeling."""
+    return get_analytics().salary_by_department(active_only=active_only)
+
+
+@router.get("/salary/by-country")
+async def salary_by_country(active_only: bool = Query(True)):
+    """Lønn per land."""
+    return get_analytics().salary_by_country(active_only=active_only)
+
+
+@router.get("/salary/by-age")
+async def salary_by_age(active_only: bool = Query(True)):
+    """Lønn per aldersgruppe."""
+    return get_analytics().salary_by_age(active_only=active_only)
+
+
+@router.get("/salary/by-job-family")
+async def salary_by_job_family(active_only: bool = Query(True)):
+    """Lønn per jobbfamilie."""
+    return get_analytics().salary_by_job_family(active_only=active_only)
